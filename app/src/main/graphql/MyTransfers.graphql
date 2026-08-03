@@ -1,0 +1,11 @@
+query MyTransfers {
+  myTransfers {
+    id
+    ruleType
+    status
+    packages {
+      id
+      packageId
+    }
+  }
+}

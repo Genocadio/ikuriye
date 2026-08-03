@@ -1,0 +1,10 @@
+query SearchUsers($query: String!, $role: Role) {
+  searchUsers(query: $query, role: $role) {
+    id
+    firstName
+    lastName
+    username
+    phone
+    role
+  }
+}

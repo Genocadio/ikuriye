@@ -1,0 +1,896 @@
+package com.gocavgo.ikuriye.data
+
+import android.util.Log
+import com.gocavgo.ikuriye.AcceptPackageByTransferMutation
+import com.gocavgo.ikuriye.AvailablePackagesQuery
+import com.gocavgo.ikuriye.ConfirmDeliveryMutation
+import com.gocavgo.ikuriye.ConfirmTransferMutation
+import com.gocavgo.ikuriye.CreatePackageMutation
+import com.gocavgo.ikuriye.CreateTransferMutation
+import com.gocavgo.ikuriye.GeneratePickupCodeMutation
+import com.gocavgo.ikuriye.InitiateDeliveryMutation
+import com.gocavgo.ikuriye.MyPackagesQuery
+import com.gocavgo.ikuriye.MyTransfersQuery
+import com.gocavgo.ikuriye.PackageByIdQuery
+import com.gocavgo.ikuriye.PackageByTrackingCodeQuery
+import com.gocavgo.ikuriye.RegenerateDeliveryCodeMutation
+import com.gocavgo.ikuriye.RequestTransferMutation
+import com.gocavgo.ikuriye.network.ApolloClientProvider
+import com.gocavgo.ikuriye.type.AcceptTransferInput
+import com.gocavgo.ikuriye.type.ConfirmDeliveryInput
+import com.gocavgo.ikuriye.type.CreatePackageInput
+import com.gocavgo.ikuriye.type.CreateTransferInput
+import com.gocavgo.ikuriye.type.InitiateDeliveryInput
+import com.gocavgo.ikuriye.type.PackageStatus as GqlPackageStatus
+import com.gocavgo.ikuriye.type.RegenerateDeliveryCodeInput
+import com.gocavgo.ikuriye.type.SortOrder
+import com.gocavgo.ikuriye.type.TransferRuleType
+import com.apollographql.apollo.api.Optional
+import kotlinx.coroutines.isActive
+
+data class PagedResult(
+    val items: List<ClientPackage>,
+    val totalCount: Int,
+    val totalPages: Int,
+    val currentPage: Int
+)
+
+object PackageRepository {
+
+    private const val TAG = "PackageRepository"
+
+    suspend fun fetchMyPackages(
+        page: Int = 0,
+        size: Int = 20,
+        order: SortOrder = SortOrder.DESC
+    ): PagedResult {
+        return try {
+            val response = ApolloClientProvider.client
+                .query(MyPackagesQuery(
+                    page = Optional.presentIfNotNull(page),
+                    size = Optional.presentIfNotNull(size),
+                    order = Optional.presentIfNotNull(order)
+                ))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            Log.d("PackageMedia", "fetchMyPackages errors=${errors != null && errors.isNotEmpty()}, hasData=${data != null}")
+            if (errors != null && errors.isNotEmpty()) {
+                val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }
+                Log.e(TAG, "fetchMyPackages: GraphQL errors — $errorMsgs")
+                PagedResult(emptyList(), 0, 0, 0)
+            } else if (data != null) {
+                val page = data.myPackages
+                PagedResult(
+                    items = page.items.map { pkg -> mapMyPackage(pkg) },
+                    totalCount = page.totalCount,
+                    totalPages = page.totalPages,
+                    currentPage = page.currentPage
+                )
+            } else {
+                Log.e(TAG, "fetchMyPackages: no data")
+                PagedResult(emptyList(), 0, 0, 0)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchMyPackages: exception — ${e.message}", e)
+            PagedResult(emptyList(), 0, 0, 0)
+        }
+    }
+
+    suspend fun fetchAvailablePackages(
+        page: Int = 0,
+        size: Int = 20,
+        order: SortOrder = SortOrder.DESC
+    ): PagedResult {
+        return try {
+            val response = ApolloClientProvider.client
+                .query(AvailablePackagesQuery(
+                    page = Optional.presentIfNotNull(page),
+                    size = Optional.presentIfNotNull(size),
+                    order = Optional.presentIfNotNull(order)
+                ))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }
+                Log.e(TAG, "fetchAvailablePackages: GraphQL errors — $errorMsgs")
+                PagedResult(emptyList(), 0, 0, 0)
+            } else if (data != null) {
+                val page = data.availablePackages
+                PagedResult(
+                    items = page.items.map { pkg -> mapAvailablePackage(pkg) },
+                    totalCount = page.totalCount,
+                    totalPages = page.totalPages,
+                    currentPage = page.currentPage
+                )
+            } else {
+                Log.e(TAG, "fetchAvailablePackages: no data")
+                PagedResult(emptyList(), 0, 0, 0)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchAvailablePackages: exception — ${e.message}", e)
+            PagedResult(emptyList(), 0, 0, 0)
+        }
+    }
+
+    suspend fun trackByCode(code: String): ClientPackage? {
+        return try {
+            val response = ApolloClientProvider.client
+                .query(PackageByTrackingCodeQuery(code))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }
+                Log.e(TAG, "trackByCode: GraphQL errors — $errorMsgs")
+                null
+            } else if (data != null) {
+                data.packageByTrackingCode?.let { pkg ->
+                    mapTrackedPackage(pkg)
+                }
+            } else {
+                Log.e(TAG, "trackByCode: no data")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "trackByCode: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Fetch a single package by its internal UUID from the backend.
+     * Used e.g. when a notification points to a package that may not
+     * be present in the locally-cached lists.
+     */
+    suspend fun fetchPackageById(id: String): ClientPackage? {
+        return try {
+            val response = ApolloClientProvider.client
+                .query(PackageByIdQuery(id))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }
+                Log.e(TAG, "fetchPackageById: GraphQL errors — $errorMsgs")
+                null
+            } else if (data != null) {
+                data.`package`?.let { mapPackageById(it) }
+            } else {
+                Log.e(TAG, "fetchPackageById: no data")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchPackageById: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun createPackage(input: CreatePackageInput): ClientPackage? {
+        return try {
+            val response = ApolloClientProvider.client
+                .mutation(CreatePackageMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            Log.d("PackageMedia", "=== GRAPHQL RESPONSE ===")
+            Log.d("PackageMedia", "Has errors: ${errors != null && errors.isNotEmpty()}")
+            Log.d("PackageMedia", "Has data: ${data != null}")
+            if (data != null) {
+                val pkg = data.createPackage.deliveryPackage
+                Log.d("PackageMedia", "Response media: ${pkg.details?.media?.map { "${it?.url} (${it?.mediaType})" }}")
+            }
+            if (errors != null && errors.isNotEmpty()) {
+                val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }
+                Log.e(TAG, "createPackage: GraphQL errors — $errorMsgs")
+                null
+            } else if (data != null) {
+                mapCreatedPackage(data.createPackage)
+            } else {
+                Log.e(TAG, "createPackage: no data")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "createPackage: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    private fun mapCreatedPackage(result: CreatePackageMutation.CreatePackage): ClientPackage {
+        val pkg = result.deliveryPackage
+        val sender = pkg.people?.find { it?.role?.name == "SENDER" }
+        val receiver = pkg.people?.find { it?.role?.name == "RECEIVER" }
+        val origin = pkg.locations?.find { it?.type?.name == "ORIGIN" }
+        val destination = pkg.locations?.find { it?.type?.name == "DESTINATION" }
+
+        val status = mapStatus(pkg.status)
+
+        val history = (pkg.events ?: emptyList()).mapNotNull { event ->
+            event?.let {
+                StatusUpdate(
+                    status = mapStatusFromEventType(it.eventType),
+                    timestamp = it.createdAt,
+                    location = "",
+                    message = it.description ?: ""
+                )
+            }
+        }
+
+        // Extract transfer info from creation response
+        val transfer = result.transfer
+        val transferId = transfer?.id
+        val transferStatus = transfer?.status?.name
+        val transferRuleType = transfer?.ruleType?.name
+        val serverTransfers = if (transfer != null) {
+            listOf(ServerTransferInfo(transfer.id, transfer.ruleType.name, transfer.status.name))
+        } else emptyList()
+
+        return ClientPackage(
+            id = pkg.trackingCode,
+            trackingCode = pkg.trackingCode,
+            packageUuid = pkg.id,
+            senderId = sender?.userId ?: "",
+            senderName = sender?.name ?: "",
+            senderPhone = sender?.phone ?: "",
+            fromAddress = origin?.placeName ?: "",
+            recipientId = receiver?.userId ?: "",
+            recipientName = receiver?.name ?: "",
+            recipientPhone = receiver?.phone ?: "",
+            toAddress = destination?.placeName ?: "",
+            description = pkg.details?.description ?: "",
+            weight = pkg.details?.weight?.let { "$it kg" } ?: "",
+            category = pkg.details?.category ?: "",
+            fragile = pkg.details?.fragile ?: false,
+            mediaUrls = pkg.details?.media?.mapNotNull { it?.url } ?: emptyList(),
+            photoCount = pkg.details?.media?.size ?: 0,
+            status = status,
+            driverName = "",
+            driverPhone = "",
+            createdAt = pkg.createdAt,
+            receivedAt = if (status == PackageStatus.DELIVERED) pkg.updatedAt ?: "" else "",
+            statusHistory = history,
+            custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
+                c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
+            },
+            transferId = transferId,
+            transferStatus = transferStatus,
+            transferRuleType = transferRuleType,
+            transfers = serverTransfers
+        )
+    }
+
+    private fun mapMyPackage(pkg: MyPackagesQuery.Item): ClientPackage {
+        val sender = pkg.people?.find { it?.role?.name == "SENDER" }
+        val receiver = pkg.people?.find { it?.role?.name == "RECEIVER" }
+        val origin = pkg.locations.find { it?.type?.name == "ORIGIN" }
+        val destination = pkg.locations.find { it?.type?.name == "DESTINATION" }
+
+        val status = mapStatus(pkg.status)
+
+        val history = (pkg.events ?: emptyList()).mapNotNull { event ->
+            event?.let {
+                StatusUpdate(
+                    status = mapStatusFromEventType(it.eventType),
+                    timestamp = it.createdAt,
+                    location = "",
+                    message = it.description ?: ""
+                )
+            }
+        }
+
+        // Parse transfers from server response
+        val serverTransfers = pkg.transfers.mapNotNull { t ->
+            ServerTransferInfo(id = t.id, ruleType = t.ruleType.name, status = t.status.name)
+        }
+        val firstActive = serverTransfers.firstOrNull { it.status == "PENDING" || it.status == "REQUESTED" }
+
+        return ClientPackage(
+            id = pkg.trackingCode,
+            trackingCode = pkg.trackingCode,
+            packageUuid = pkg.id,
+            senderId = sender?.userId ?: "",
+            senderName = sender?.name ?: "",
+            senderPhone = sender?.phone ?: "",
+            fromAddress = origin?.placeName ?: "",
+            recipientId = receiver?.userId ?: "",
+            recipientName = receiver?.name ?: "",
+            recipientPhone = receiver?.phone ?: "",
+            toAddress = destination?.placeName ?: "",
+            description = pkg.details?.description ?: "",
+            weight = pkg.details?.weight?.let { "$it kg" } ?: "",
+            category = pkg.details?.category ?: "",
+            fragile = pkg.details?.fragile ?: false,
+            mediaUrls = pkg.details?.media?.mapNotNull { it?.url } ?: emptyList(),
+            photoCount = pkg.details?.media?.size ?: 0,
+            status = status,
+            driverName = "",
+            driverPhone = "",
+            createdAt = pkg.createdAt,
+            receivedAt = if (status == PackageStatus.DELIVERED) pkg.updatedAt ?: "" else "",
+            statusHistory = history,
+            custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
+                c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
+            },
+            transfers = serverTransfers,
+            transferId = firstActive?.id,
+            transferStatus = firstActive?.status,
+            transferRuleType = firstActive?.ruleType
+        )
+    }
+
+    private fun mapAvailablePackage(pkg: AvailablePackagesQuery.Item): ClientPackage {
+        val sender = pkg.people?.find { it?.role?.name == "SENDER" }
+        val receiver = pkg.people?.find { it?.role?.name == "RECEIVER" }
+        val origin = pkg.locations?.find { it?.type?.name == "ORIGIN" }
+        val destination = pkg.locations?.find { it?.type?.name == "DESTINATION" }
+
+        val status = mapStatus(pkg.status)
+
+        val history = (pkg.events ?: emptyList()).mapNotNull { event ->
+            event?.let {
+                StatusUpdate(
+                    status = mapStatusFromEventType(it.eventType),
+                    timestamp = it.createdAt,
+                    location = "",
+                    message = it.description ?: ""
+                )
+            }
+        }
+
+        val serverTransfers = pkg.transfers.mapNotNull { t ->
+            ServerTransferInfo(id = t.id, ruleType = t.ruleType.name, status = t.status.name)
+        }
+        val firstActive = serverTransfers.firstOrNull { it.status == "PENDING" || it.status == "REQUESTED" }
+
+        return ClientPackage(
+            id = pkg.trackingCode,
+            trackingCode = pkg.trackingCode,
+            packageUuid = pkg.id,
+            senderId = sender?.userId ?: "",
+            senderName = sender?.name ?: "",
+            senderPhone = sender?.phone ?: "",
+            fromAddress = origin?.placeName ?: "",
+            recipientId = receiver?.userId ?: "",
+            recipientName = receiver?.name ?: "",
+            recipientPhone = receiver?.phone ?: "",
+            toAddress = destination?.placeName ?: "",
+            description = pkg.details?.description ?: "",
+            weight = pkg.details?.weight?.let { "$it kg" } ?: "",
+            category = pkg.details?.category ?: "",
+            fragile = pkg.details?.fragile ?: false,
+            mediaUrls = pkg.details?.media?.mapNotNull { it?.url } ?: emptyList(),
+            photoCount = pkg.details?.media?.size ?: 0,
+            status = status,
+            driverName = "",
+            driverPhone = "",
+            createdAt = pkg.createdAt,
+            receivedAt = if (status == PackageStatus.DELIVERED) pkg.updatedAt ?: "" else "",
+            statusHistory = history,
+            custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
+                c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
+            },
+            transfers = serverTransfers,
+            transferId = firstActive?.id,
+            transferStatus = firstActive?.status,
+            transferRuleType = firstActive?.ruleType
+        )
+    }
+
+    internal fun mapPackageById(pkg: PackageByIdQuery.Package): ClientPackage {
+        val sender = pkg.people.find { it.role.name == "SENDER" }
+        val receiver = pkg.people.find { it.role.name == "RECEIVER" }
+        val origin = pkg.locations.find { it.type.name == "ORIGIN" }
+        val destination = pkg.locations.find { it.type.name == "DESTINATION" }
+
+        val status = mapStatus(pkg.status)
+
+        val history = pkg.events.mapNotNull { event ->
+            StatusUpdate(
+                status = mapStatusFromEventType(event.eventType),
+                timestamp = event.createdAt,
+                location = "",
+                message = event.description ?: ""
+            )
+        }
+
+        return ClientPackage(
+            id = pkg.trackingCode,
+            trackingCode = pkg.trackingCode,
+            packageUuid = pkg.id,
+            senderId = sender?.userId ?: "",
+            senderName = sender?.name ?: "",
+            senderPhone = sender?.phone ?: "",
+            fromAddress = origin?.placeName ?: "",
+            recipientId = receiver?.userId ?: "",
+            recipientName = receiver?.name ?: "",
+            recipientPhone = receiver?.phone ?: "",
+            toAddress = destination?.placeName ?: "",
+            description = pkg.details?.description ?: "",
+            weight = pkg.details?.weight?.let { "$it kg" } ?: "",
+            category = pkg.details?.category ?: "",
+            fragile = pkg.details?.fragile ?: false,
+            mediaUrls = pkg.details?.media?.mapNotNull { it.url } ?: emptyList(),
+            photoCount = pkg.details?.media?.size ?: 0,
+            status = status,
+            driverName = "",
+            driverPhone = "",
+            createdAt = pkg.createdAt,
+            receivedAt = if (status == PackageStatus.DELIVERED) pkg.updatedAt else "",
+            statusHistory = history,
+            custodians = pkg.custodians.map { c ->
+                CustodianInfo(c.id, c.userId, c.name ?: "", c.phone ?: "", c.role.name, c.assignedAt)
+            }
+        )
+    }
+
+    private fun mapTrackedPackage(pkg: PackageByTrackingCodeQuery.PackageByTrackingCode): ClientPackage {
+        val sender = pkg.people?.find { it?.role?.name == "SENDER" }
+        val receiver = pkg.people?.find { it?.role?.name == "RECEIVER" }
+        val origin = pkg.locations?.find { it?.type?.name == "ORIGIN" }
+        val destination = pkg.locations?.find { it?.type?.name == "DESTINATION" }
+
+        val status = mapStatus(pkg.status)
+
+        val history = (pkg.events ?: emptyList()).mapNotNull { event ->
+            event?.let {
+                StatusUpdate(
+                    status = mapStatusFromEventType(it.eventType),
+                    timestamp = it.createdAt,
+                    location = "",
+                    message = it.description ?: ""
+                )
+            }
+        }
+
+        // Parse transfers from server response
+        val serverTransfers = (pkg.transfers ?: emptyList()).mapNotNull { t ->
+            ServerTransferInfo(id = t.id, ruleType = t.ruleType.name, status = t.status.name)
+        }
+        val firstActive = serverTransfers.firstOrNull { it.status == "PENDING" || it.status == "REQUESTED" }
+
+        return ClientPackage(
+            id = pkg.trackingCode,
+            trackingCode = pkg.trackingCode,
+            packageUuid = pkg.id,
+            senderId = sender?.userId ?: "",
+            senderName = sender?.name ?: "",
+            senderPhone = sender?.phone ?: "",
+            fromAddress = origin?.placeName ?: "",
+            recipientId = receiver?.userId ?: "",
+            recipientName = receiver?.name ?: "",
+            recipientPhone = receiver?.phone ?: "",
+            toAddress = destination?.placeName ?: "",
+            description = pkg.details?.description ?: "",
+            weight = pkg.details?.weight?.let { "$it kg" } ?: "",
+            category = pkg.details?.category ?: "",
+            fragile = pkg.details?.fragile ?: false,
+            mediaUrls = pkg.details?.media?.mapNotNull { it?.url } ?: emptyList(),
+            photoCount = pkg.details?.media?.size ?: 0,
+            status = status,
+            driverName = "",
+            driverPhone = "",
+            createdAt = pkg.createdAt,
+            receivedAt = if (status == PackageStatus.DELIVERED) pkg.updatedAt ?: "" else "",
+            statusHistory = history,
+            custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
+                c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
+            },
+            transfers = serverTransfers,
+            transferId = firstActive?.id,
+            transferStatus = firstActive?.status,
+            transferRuleType = firstActive?.ruleType
+        )
+    }
+
+    // ── Pickup Code Operations ───────────────────────────────────────────────
+
+    data class PickupCodeResult(
+        val packageId: String,
+        val pickupCode: String
+    )
+
+    suspend fun generatePickupCode(packageId: String): PickupCodeResult? {
+        return try {
+            val input = com.gocavgo.ikuriye.type.GeneratePickupCodeInput(packageId = packageId)
+            val response = ApolloClientProvider.client
+                .mutation(GeneratePickupCodeMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "generatePickupCode: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                val pkg = data.generatePickupCode.deliveryPackage
+                PickupCodeResult(
+                    packageId = pkg.id,
+                    pickupCode = data.generatePickupCode.pickupCode ?: ""
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "generatePickupCode: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    // ── Delivery Initiation / Confirmation ──────────────────────────────────
+
+    /**
+     * Result of [initiateDelivery] / [regenerateDeliveryCode].
+     * Carries the one-time 6-digit code that only the sender/receiver may see.
+     */
+    data class DeliveryCodeResult(
+        val packageUuid: String,
+        val deliveryCode: String,
+        val packageStatus: PackageStatus
+    )
+
+    /**
+     * Initiates delivery for a package: transitions it to PENDING_CONFIRMATION
+     * and generates a one-time delivery code published to the sender/receiver.
+     * Callable by the current custodian (driver) only — no code required.
+     */
+    suspend fun initiateDelivery(packageUuid: String): DeliveryCodeResult? {
+        return try {
+            val input = InitiateDeliveryInput(packageId = packageUuid)
+            val response = ApolloClientProvider.client
+                .mutation(InitiateDeliveryMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "initiateDelivery: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                DeliveryCodeResult(
+                    packageUuid = data.initiateDelivery.deliveryPackage.id,
+                    deliveryCode = data.initiateDelivery.deliveryCode,
+                    packageStatus = mapStatus(data.initiateDelivery.deliveryPackage.status)
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "initiateDelivery: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Confirms delivery of a PENDING_CONFIRMATION package using the delivery
+     * code received from the sender/receiver. Sets the package to DELIVERED.
+     */
+    suspend fun confirmDelivery(packageUuid: String, deliveryCode: String): ClientPackage? {
+        return try {
+            val input = ConfirmDeliveryInput(packageId = packageUuid, deliveryCode = deliveryCode)
+            val response = ApolloClientProvider.client
+                .mutation(ConfirmDeliveryMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "confirmDelivery: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                mapConfirmedPackage(data.confirmDelivery)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "confirmDelivery: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Regenerates the delivery code while a package is PENDING_CONFIRMATION.
+     * Invalidates the previous code and re-publishes the new one.
+     */
+    suspend fun regenerateDeliveryCode(packageUuid: String): DeliveryCodeResult? {
+        return try {
+            val input = RegenerateDeliveryCodeInput(packageId = packageUuid)
+            val response = ApolloClientProvider.client
+                .mutation(RegenerateDeliveryCodeMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "regenerateDeliveryCode: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                DeliveryCodeResult(
+                    packageUuid = data.regenerateDeliveryCode.deliveryPackage.id,
+                    deliveryCode = data.regenerateDeliveryCode.deliveryCode,
+                    packageStatus = mapStatus(data.regenerateDeliveryCode.deliveryPackage.status)
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "regenerateDeliveryCode: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    private fun mapConfirmedPackage(pkg: ConfirmDeliveryMutation.ConfirmDelivery): ClientPackage {
+        val sender = pkg.people.find { it.role.name == "SENDER" }
+        val receiver = pkg.people.find { it.role.name == "RECEIVER" }
+        val origin = pkg.locations.find { it.type.name == "ORIGIN" }
+        val destination = pkg.locations.find { it.type.name == "DESTINATION" }
+
+        val status = mapStatus(pkg.status)
+
+        val history = pkg.events.mapNotNull { event ->
+            StatusUpdate(
+                status = mapStatusFromEventType(event.eventType),
+                timestamp = event.createdAt,
+                location = "",
+                message = event.description ?: ""
+            )
+        }
+
+        return ClientPackage(
+            id = pkg.trackingCode,
+            trackingCode = pkg.trackingCode,
+            packageUuid = pkg.id,
+            senderId = sender?.userId ?: "",
+            senderName = sender?.name ?: "",
+            senderPhone = sender?.phone ?: "",
+            fromAddress = origin?.placeName ?: "",
+            recipientId = receiver?.userId ?: "",
+            recipientName = receiver?.name ?: "",
+            recipientPhone = receiver?.phone ?: "",
+            toAddress = destination?.placeName ?: "",
+            description = pkg.details?.description ?: "",
+            weight = pkg.details?.weight?.let { "$it kg" } ?: "",
+            category = pkg.details?.category ?: "",
+            fragile = pkg.details?.fragile ?: false,
+            mediaUrls = pkg.details?.media?.mapNotNull { it.url } ?: emptyList(),
+            photoCount = pkg.details?.media?.size ?: 0,
+            status = status,
+            createdAt = pkg.createdAt,
+            receivedAt = if (status == PackageStatus.DELIVERED) pkg.updatedAt else "",
+            statusHistory = history,
+            custodians = pkg.custodians.map { c ->
+                CustodianInfo(c.id, c.userId, c.name ?: "", c.phone ?: "", c.role.name, c.assignedAt)
+            }
+        )
+    }
+
+    // ── Transfer Operations ──────────────────────────────────────────────────
+
+    data class TransferInfo(
+        val id: String,
+        val ruleType: String,
+        val status: String,
+        val transferCode: String? = null,
+        val packageIds: List<String> = emptyList()
+    )
+
+    suspend fun createTransfer(
+        packageIds: List<String>,
+        ruleType: String,
+        matchUserId: String? = null,
+        acceptorType: String = "WORKER"
+    ): TransferInfo? {
+        return try {
+            val ruleTypeEnum = try {
+                TransferRuleType.valueOf(ruleType)
+            } catch (_: IllegalArgumentException) { null } ?: return null
+
+            val acceptorTypeEnum = try {
+                com.gocavgo.ikuriye.type.TransferAcceptorType.valueOf(acceptorType)
+            } catch (_: IllegalArgumentException) { null } ?: return null
+
+            val input = CreateTransferInput(
+                packageIds = packageIds,
+                ruleType = ruleTypeEnum,
+                acceptorType = Optional.present(acceptorTypeEnum),
+                matchUserId = if (matchUserId?.isNotBlank() == true) Optional.present(matchUserId) else Optional.absent()
+            )
+            val response = ApolloClientProvider.client
+                .mutation(CreateTransferMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "createTransfer: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                val t = data.createTransfer
+                TransferInfo(
+                    id = t.id,
+                    ruleType = t.ruleType.name,
+                    status = t.status.name,
+                    transferCode = t.transferCode,
+                    packageIds = t.packages.mapNotNull { it?.packageId }
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "createTransfer: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun confirmTransfer(transferId: String): TransferInfo? {
+        return try {
+            val response = ApolloClientProvider.client
+                .mutation(ConfirmTransferMutation(transferId))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "confirmTransfer: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                val t = data.confirmTransfer
+                TransferInfo(
+                    id = t.id,
+                    ruleType = t.ruleType.name,
+                    status = t.status.name,
+                    packageIds = t.packages.mapNotNull { it?.packageId }
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "confirmTransfer: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun requestTransfer(transferId: String): TransferInfo? {
+        return try {
+            val input = AcceptTransferInput(
+                transferId = transferId,
+                transferCode = Optional.Absent
+            )
+            val response = ApolloClientProvider.client
+                .mutation(RequestTransferMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }
+                Log.e(TAG, "requestTransfer: GraphQL errors — $errorMsgs")
+                null
+            } else if (data != null) {
+                val t = data.acceptTransfer.transfer
+                TransferInfo(
+                    id = t.id,
+                    ruleType = t.ruleType.name,
+                    status = t.status.name,
+                    packageIds = t.packages.mapNotNull { it?.packageId }
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "requestTransfer: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun acceptPackageByTransfer(transferId: String, transferCode: String? = null): Boolean {
+        return try {
+            val input = AcceptTransferInput(
+                transferId = transferId,
+                transferCode = if (transferCode?.isNotBlank() == true) Optional.present(transferCode) else Optional.Absent
+            )
+            val response = ApolloClientProvider.client
+                .mutation(AcceptPackageByTransferMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "acceptPackageByTransfer: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                false
+            } else {
+                data != null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "acceptPackageByTransfer: exception — ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun fetchMyTransfers(): List<TransferInfo> {
+        return try {
+            val response = ApolloClientProvider.client
+                .query(MyTransfersQuery())
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "fetchMyTransfers: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                emptyList()
+            } else if (data != null) {
+                data.myTransfers.mapNotNull { t ->
+                    t?.let {
+                        TransferInfo(
+                            id = it.id,
+                            ruleType = it.ruleType.name,
+                            status = it.status.name,
+                            packageIds = it.packages.mapNotNull { p -> p?.packageId }
+                        )
+                    }
+                }
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchMyTransfers: exception — ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    // ── Polling-based new package detection (driver-side, real-time approx) ──
+
+    /**
+     * Periodically polls for available packages and emits only packages that
+     * are new (not in the already-seen set). Uses a 30-second polling interval.
+     *
+     * @param seenIds set of package IDs already known — new IDs are emitted
+     * @return a flow that emits new [ClientPackage]s as they appear
+     */
+    fun pollNewPackages(seenIds: Set<String> = emptySet()): kotlinx.coroutines.flow.Flow<ClientPackage> = kotlinx.coroutines.flow.flow {
+        var knownIds = seenIds.toMutableSet()
+        // Small initial delay to let other startup work finish, then poll every 30 seconds
+        kotlinx.coroutines.delay(3_000)
+        // Check isActive so the loop stops promptly when the collecting coroutine
+        // is cancelled (e.g. driver logs out, ViewModel clears, app goes to background).
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+            try {
+                val result = fetchAvailablePackages(page = 0, size = 20, order = SortOrder.DESC)
+                val newItems = result.items.filter { it.id !in knownIds }
+                if (newItems.isNotEmpty()) {
+                    knownIds.addAll(newItems.map { it.id })
+                    for (pkg in newItems) {
+                        emit(pkg)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "pollNewPackages: exception — ${e.message}", e)
+            }
+            if (!kotlinx.coroutines.currentCoroutineContext().isActive) break
+            kotlinx.coroutines.delay(30_000) // poll every 30 seconds
+        }
+    }
+
+    internal fun mapStatus(gql: GqlPackageStatus): PackageStatus {
+        return when (gql) {
+            GqlPackageStatus.CREATED -> PackageStatus.PENDING
+            GqlPackageStatus.ACCEPTED -> PackageStatus.PENDING
+            GqlPackageStatus.PICKED_UP -> PackageStatus.PICKED_UP
+            GqlPackageStatus.IN_TRANSIT -> PackageStatus.IN_TRANSIT
+            GqlPackageStatus.PENDING_CONFIRMATION -> PackageStatus.PENDING_CONFIRMATION
+            GqlPackageStatus.DELIVERED -> PackageStatus.DELIVERED
+            GqlPackageStatus.COMPLETED -> PackageStatus.DELIVERED
+            GqlPackageStatus.CANCELLED -> PackageStatus.CANCELLED
+            GqlPackageStatus.ORIGIN_OFFICE -> PackageStatus.IN_TRANSIT
+            GqlPackageStatus.ASSIGNED_DRIVER -> PackageStatus.PICKED_UP
+            GqlPackageStatus.DESTINATION_OFFICE -> PackageStatus.IN_TRANSIT
+            GqlPackageStatus.READY_FOR_COLLECTION -> PackageStatus.OUT_FOR_DELIVERY
+            else -> PackageStatus.PENDING
+        }
+    }
+
+    internal fun mapStatusFromEventType(eventType: String): PackageStatus {
+        return when (eventType.uppercase()) {
+            "CREATED", "ACCEPTED" -> PackageStatus.PENDING
+            "PICKED_UP" -> PackageStatus.PICKED_UP
+            "IN_TRANSIT" -> PackageStatus.IN_TRANSIT
+            "DELIVERY_INITIATED" -> PackageStatus.PENDING_CONFIRMATION
+            "DELIVERED", "COMPLETED" -> PackageStatus.DELIVERED
+            "CANCELLED" -> PackageStatus.CANCELLED
+            "ORIGIN_OFFICE", "ASSIGNED_DRIVER", "DESTINATION_OFFICE" -> PackageStatus.IN_TRANSIT
+            "READY_FOR_COLLECTION" -> PackageStatus.OUT_FOR_DELIVERY
+            else -> PackageStatus.PENDING
+        }
+    }
+}

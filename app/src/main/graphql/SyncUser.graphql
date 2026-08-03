@@ -1,0 +1,14 @@
+mutation SyncUser {
+  syncUser {
+    id
+    email
+    phone
+    firstName
+    lastName
+    username
+    role
+    status
+    createdAt
+    updatedAt
+  }
+}

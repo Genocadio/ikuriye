@@ -1,0 +1,11 @@
+mutation ConfirmTransfer($transferId: ID!) {
+  confirmTransfer(transferId: $transferId) {
+    id
+    ruleType
+    status
+    packages {
+      id
+      packageId
+    }
+  }
+}

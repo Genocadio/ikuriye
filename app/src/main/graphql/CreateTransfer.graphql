@@ -1,0 +1,12 @@
+mutation CreateTransfer($input: CreateTransferInput!) {
+  createTransfer(input: $input) {
+    id
+    ruleType
+    status
+    transferCode
+    packages {
+      id
+      packageId
+    }
+  }
+}

@@ -1,0 +1,61 @@
+query AvailablePackages($page: Int, $size: Int, $order: SortOrder) {
+  availablePackages(page: $page, size: $size, order: $order) {
+    items {
+      id
+      trackingCode
+      deliveryType
+      status
+      creatorId
+      custodians {
+        id
+        userId
+        name
+        phone
+        role
+        assignedAt
+      }
+      people {
+        id
+        role
+        userId
+        name
+        phone
+      }
+      locations {
+        id
+        type
+        placeName
+        latitude
+        longitude
+      }
+      details {
+        category
+        description
+        fragile
+        weight
+        media {
+          id
+          url
+          mediaType
+          createdAt
+        }
+      }
+      events {
+        id
+        eventType
+        description
+        createdAt
+      }
+      transfers {
+        id
+        ruleType
+        status
+      }
+      createdAt
+      updatedAt
+    }
+    totalCount
+    totalPages
+    currentPage
+  }
+}

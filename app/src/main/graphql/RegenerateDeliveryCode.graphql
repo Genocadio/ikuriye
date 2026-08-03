@@ -1,0 +1,48 @@
+mutation RegenerateDeliveryCode($input: RegenerateDeliveryCodeInput!) {
+  regenerateDeliveryCode(input: $input) {
+    deliveryPackage {
+      id
+      trackingCode
+      deliveryType
+      status
+      creatorId
+      custodians {
+        id
+        userId
+        name
+        phone
+        role
+        assignedAt
+      }
+      people {
+        id
+        role
+        userId
+        name
+        phone
+      }
+      locations {
+        id
+        type
+        placeName
+        latitude
+        longitude
+      }
+      details {
+        category
+        description
+        fragile
+        weight
+      }
+      events {
+        id
+        eventType
+        description
+        createdAt
+      }
+      createdAt
+      updatedAt
+    }
+    deliveryCode
+  }
+}

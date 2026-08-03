@@ -1,0 +1,13 @@
+mutation RequestTransfer($input: AcceptTransferInput!) {
+  acceptTransfer(input: $input) {
+    transfer {
+      id
+      ruleType
+      status
+      packages {
+        id
+        packageId
+      }
+    }
+  }
+}

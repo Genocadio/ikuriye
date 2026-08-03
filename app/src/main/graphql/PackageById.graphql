@@ -1,0 +1,59 @@
+query PackageById($id: ID!) {
+  package(id: $id) {
+    id
+    trackingCode
+    deliveryType
+    status
+    creatorId
+    custodians {
+      id
+      userId
+      name
+      phone
+      role
+      assignedAt
+    }
+    people {
+      id
+      role
+      userId
+      name
+      phone
+    }
+    locations {
+      id
+      type
+      placeName
+      latitude
+      longitude
+    }
+    details {
+      category
+      description
+      fragile
+      weight
+      media {
+        id
+        url
+        mediaType
+        createdAt
+      }
+    }
+    events {
+      id
+      eventType
+      actorId
+      description
+      createdAt
+    }
+    custody {
+      id
+      fromEntity
+      toEntity
+      timestamp
+      notes
+    }
+    createdAt
+    updatedAt
+  }
+}
