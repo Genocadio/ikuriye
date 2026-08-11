@@ -1,7 +1,7 @@
 
   name: Release
 
-  # Builds a signed production APK + AAB and publishes them
+  # Builds a signed production APK and publishes it
   # to GitHub Releases whenever a version tag is pushed.
   #
   # Example:
@@ -24,8 +24,8 @@
 
       timeout-minutes: 60
 
-      # Make GitHub Secrets available to EVERY step in this job.
-      # This is important because Gradle reads them through System.getenv().
+      # Make GitHub Secrets available to EVERY step.
+      # Gradle reads these through System.getenv().
       env:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -49,7 +49,7 @@
             fetch-depth: 0
 
         # ------------------------------------------------------------
-        # 2. Java
+        # 2. Set up Java
         # ------------------------------------------------------------
         - name: Set up JDK 21
           uses: actions/setup-java@v4
@@ -59,7 +59,7 @@
             cache: gradle
 
         # ------------------------------------------------------------
-        # 3. Gradle
+        # 3. Set up Gradle
         # ------------------------------------------------------------
         - name: Set up Gradle
           uses: gradle/actions/setup-gradle@v4
@@ -104,8 +104,6 @@
             
             echo "All required secrets are present."
             
-            # Optional values are allowed to be empty because
-            # build.gradle.kts provides defaults for them.
             if [ -z "${MEDIA_BUCKET:-}" ]; then
               echo "MEDIA_BUCKET is not set; Gradle default will be used."
             fi
@@ -118,10 +116,6 @@
         # 6. Compute Android version from Git tag
         #
         # v1.2.3 -> VERSION_NAME=1.2.3
-        #
-        # VERSION_CODE is based on the number of commits in the
-        # repository. It automatically increases as the repository
-        # history grows.
         # ------------------------------------------------------------
         - name: Compute version
           shell: bash
@@ -148,7 +142,7 @@
             echo "Version code: $VERSION_CODE"
 
         # ------------------------------------------------------------
-        # 7. Show Android/Java/Gradle information
+        # 7. Show build environment
         # ------------------------------------------------------------
         - name: Show build environment
           run: |
@@ -165,40 +159,28 @@
 
         # ------------------------------------------------------------
         # 8. Run unit tests
-        #
-        # Because the secrets are defined at JOB level, Gradle receives
-        # them here as well.
         # ------------------------------------------------------------
         - name: Run unit tests
           run: |
             ./gradlew :app:testDebugUnitTest
 
         # ------------------------------------------------------------
-        # 9. Build signed production APK + AAB
+        # 9. Build signed production APK ONLY
         # ------------------------------------------------------------
-        - name: Build signed release APK and AAB
+        - name: Build signed release APK
           run: |
             ./gradlew \
               :app:assembleRelease \
-              :app:bundleRelease \
               --stacktrace
 
         # ------------------------------------------------------------
-        # 10. Show generated files
+        # 10. Show generated APK
         # ------------------------------------------------------------
-        - name: Show release artifacts
+        - name: Show release APK
           run: |
-            echo "APK files:"
             find app/build/outputs/apk/release \
               -type f \
               -name "*.apk" \
-              -print
-            
-            echo
-            echo "AAB files:"
-            find app/build/outputs/bundle/release \
-              -type f \
-              -name "*.aab" \
               -print
 
         # ------------------------------------------------------------
@@ -220,7 +202,7 @@
             ls -lh "$APK"
 
         # ------------------------------------------------------------
-        # 12. Verify APK signing
+        # 12. Verify APK signature
         # ------------------------------------------------------------
         - name: Verify APK signature
           shell: bash
@@ -253,22 +235,22 @@
             echo "APK signature verification successful."
 
         # ------------------------------------------------------------
-        # 13. Verify AAB exists
+        # 13. Rename APK with version
         # ------------------------------------------------------------
-        - name: Verify AAB exists
+        - name: Rename APK
           shell: bash
           run: |
             set -e
             
-            AAB="app/build/outputs/bundle/release/app-release.aab"
+            APK="app/build/outputs/apk/release/app-release.apk"
+            RELEASE_APK="ikuriye-v${VERSION_NAME}.apk"
             
-            if [ ! -f "$AAB" ]; then
-              echo "::error::Release AAB was not generated."
-              exit 1
-            fi
+            cp "$APK" "$RELEASE_APK"
             
-            echo "AAB found:"
-            ls -lh "$AAB"
+            echo "Release APK:"
+            ls -lh "$RELEASE_APK"
+            
+            echo "RELEASE_APK=$RELEASE_APK" >> "$GITHUB_ENV"
 
         # ------------------------------------------------------------
         # 14. Create GitHub Release
@@ -282,8 +264,7 @@
             generate_release_notes: true
 
             files: |
-              app/build/outputs/apk/release/*.apk
-              app/build/outputs/bundle/release/*.aab
+              ${{ env.RELEASE_APK }}
 
             fail_on_unmatched_files: true
 
@@ -297,4 +278,6 @@
             echo "Version: $VERSION_NAME"
             echo "Version code: $VERSION_CODE"
             echo "Tag: $GITHUB_REF_NAME"
+            echo "APK: $RELEASE_APK"
             echo "========================================"
+
