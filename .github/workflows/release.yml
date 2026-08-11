@@ -1,106 +1,300 @@
-name: Release
 
-# Builds a signed production release and publishes it to GitHub Releases
-# whenever a version tag (e.g. v1.2.3) is pushed.
-#
-# Required GitHub secrets (Settings → Secrets and variables → Actions):
-#   SUPABASE_URL, SUPABASE_KEY, GRAPHQL_URL    — backend config
-#   MEDIA_BUCKET, PROFILE_BUCKET               — optional (sane defaults exist)
-#   KEYSTORE_BASE64                            — base64 of your release .jks keystore
-#   KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD — keystore credentials
-#
-# Generate a keystore once locally, then upload it as a secret:
-#   keytool -genkey -v -keystore release.jks -alias <alias> -keyalg RSA \
-#     -keysize 2048 -validity 10000
-#   base64 -i release.jks -o release.jks.b64   # macOS
-#   base64 -w0 release.jks                     # Linux, then paste the output
+  name: Release
 
-on:
-  push:
-    tags:
-      - "v*"
+  # Builds a signed production APK + AAB and publishes them
+  # to GitHub Releases whenever a version tag is pushed.
+  #
+  # Example:
+  #   git tag v1.0.0
+  #   git push origin v1.0.0
 
-permissions:
-  contents: write # create the GitHub Release + upload assets
+  on:
+    push:
+      tags:
+        - "v*"
 
-jobs:
-  release:
-    name: Build & publish ${{ github.ref_name }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: Checkout (full history for versionCode)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  permissions:
+    contents: write
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
+  jobs:
+    release:
+      name: Build & publish ${{ github.ref_name }}
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      runs-on: ubuntu-latest
 
-      - name: Accept Android SDK licenses
-        run: |
-          if [ -n "${ANDROID_HOME}" ] && [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
-            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
-          fi
+      timeout-minutes: 60
 
-      - name: Check required secrets
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          GRAPHQL_URL: ${{ secrets.GRAPHQL_URL }}
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          missing=""
-          for var in SUPABASE_URL SUPABASE_KEY GRAPHQL_URL KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-            if [ -z "${!var}" ]; then missing="$missing $var"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing required GitHub secrets:$missing — add them in Settings → Secrets and variables → Actions, then re-run."
-            exit 1
-          fi
+      # Make GitHub Secrets available to EVERY step in this job.
+      # This is important because Gradle reads them through System.getenv().
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        GRAPHQL_URL: ${{ secrets.GRAPHQL_URL }}
+        MEDIA_BUCKET: ${{ secrets.MEDIA_BUCKET }}
+        PROFILE_BUCKET: ${{ secrets.PROFILE_BUCKET }}
 
-      - name: Compute version from tag
-        run: |
-          echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-          echo "VERSION_CODE=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Run unit tests
-        run: ./gradlew :app:testDebugUnitTest
+      steps:
 
-      - name: Build signed release APK & AAB
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          GRAPHQL_URL: ${{ secrets.GRAPHQL_URL }}
-          MEDIA_BUCKET: ${{ secrets.MEDIA_BUCKET }}
-          PROFILE_BUCKET: ${{ secrets.PROFILE_BUCKET }}
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew :app:assembleRelease :app:bundleRelease
+        # ------------------------------------------------------------
+        # 1. Checkout repository
+        # ------------------------------------------------------------
+        - name: Checkout repository
+          uses: actions/checkout@v4
+          with:
+            fetch-depth: 0
 
-      - name: Verify APK is signed
-        run: |
-          APKSIGNER=$(find "${ANDROID_HOME}/build-tools" -name apksigner -type f | sort -V | tail -1)
-          if [ -z "$APKSIGNER" ]; then echo "::error::apksigner not found"; exit 1; fi
-          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk
+        # ------------------------------------------------------------
+        # 2. Java
+        # ------------------------------------------------------------
+        - name: Set up JDK 21
+          uses: actions/setup-java@v4
+          with:
+            distribution: temurin
+            java-version: "21"
+            cache: gradle
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ env.VERSION_NAME }}
-          files: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/bundle/release/*.aab
-          generate_release_notes: true
+        # ------------------------------------------------------------
+        # 3. Gradle
+        # ------------------------------------------------------------
+        - name: Set up Gradle
+          uses: gradle/actions/setup-gradle@v4
+
+        # ------------------------------------------------------------
+        # 4. Make Gradle wrapper executable
+        # ------------------------------------------------------------
+        - name: Make Gradle wrapper executable
+          run: chmod +x ./gradlew
+
+        # ------------------------------------------------------------
+        # 5. Check required secrets
+        # ------------------------------------------------------------
+        - name: Check required secrets
+          shell: bash
+          run: |
+            set -e
+            
+            missing=""
+            
+            required_vars=(
+              SUPABASE_URL
+              SUPABASE_KEY
+              GRAPHQL_URL
+              KEYSTORE_BASE64
+              KEYSTORE_PASSWORD
+              KEY_ALIAS
+              KEY_PASSWORD
+            )
+            
+            for var in "${required_vars[@]}"; do
+              if [ -z "${!var:-}" ]; then
+                missing="$missing $var"
+              fi
+            done
+            
+            if [ -n "$missing" ]; then
+              echo "::error::Missing required GitHub Secrets:$missing"
+              echo "::error::Go to Settings → Secrets and variables → Actions"
+              exit 1
+            fi
+            
+            echo "All required secrets are present."
+            
+            # Optional values are allowed to be empty because
+            # build.gradle.kts provides defaults for them.
+            if [ -z "${MEDIA_BUCKET:-}" ]; then
+              echo "MEDIA_BUCKET is not set; Gradle default will be used."
+            fi
+            
+            if [ -z "${PROFILE_BUCKET:-}" ]; then
+              echo "PROFILE_BUCKET is not set; Gradle default will be used."
+            fi
+
+        # ------------------------------------------------------------
+        # 6. Compute Android version from Git tag
+        #
+        # v1.2.3 -> VERSION_NAME=1.2.3
+        #
+        # VERSION_CODE is based on the number of commits in the
+        # repository. It automatically increases as the repository
+        # history grows.
+        # ------------------------------------------------------------
+        - name: Compute version
+          shell: bash
+          run: |
+            set -e
+            
+            VERSION_NAME="${GITHUB_REF_NAME#v}"
+            VERSION_CODE="$(git rev-list --count HEAD)"
+            
+            if [ -z "$VERSION_NAME" ]; then
+              echo "::error::Could not determine VERSION_NAME"
+              exit 1
+            fi
+            
+            if ! [[ "$VERSION_CODE" =~ ^[0-9]+$ ]]; then
+              echo "::error::Invalid VERSION_CODE: $VERSION_CODE"
+              exit 1
+            fi
+            
+            echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+            echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+            
+            echo "Version name: $VERSION_NAME"
+            echo "Version code: $VERSION_CODE"
+
+        # ------------------------------------------------------------
+        # 7. Show Android/Java/Gradle information
+        # ------------------------------------------------------------
+        - name: Show build environment
+          run: |
+            echo "Java:"
+            java -version
+            
+            echo
+            echo "Gradle:"
+            ./gradlew --version
+            
+            echo
+            echo "Android SDK:"
+            echo "${ANDROID_HOME}"
+
+        # ------------------------------------------------------------
+        # 8. Run unit tests
+        #
+        # Because the secrets are defined at JOB level, Gradle receives
+        # them here as well.
+        # ------------------------------------------------------------
+        - name: Run unit tests
+          run: |
+            ./gradlew :app:testDebugUnitTest
+
+        # ------------------------------------------------------------
+        # 9. Build signed production APK + AAB
+        # ------------------------------------------------------------
+        - name: Build signed release APK and AAB
+          run: |
+            ./gradlew \
+              :app:assembleRelease \
+              :app:bundleRelease \
+              --stacktrace
+
+        # ------------------------------------------------------------
+        # 10. Show generated files
+        # ------------------------------------------------------------
+        - name: Show release artifacts
+          run: |
+            echo "APK files:"
+            find app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print
+            
+            echo
+            echo "AAB files:"
+            find app/build/outputs/bundle/release \
+              -type f \
+              -name "*.aab" \
+              -print
+
+        # ------------------------------------------------------------
+        # 11. Verify APK exists
+        # ------------------------------------------------------------
+        - name: Verify APK exists
+          shell: bash
+          run: |
+            set -e
+            
+            APK="app/build/outputs/apk/release/app-release.apk"
+            
+            if [ ! -f "$APK" ]; then
+              echo "::error::Release APK was not generated."
+              exit 1
+            fi
+            
+            echo "APK found:"
+            ls -lh "$APK"
+
+        # ------------------------------------------------------------
+        # 12. Verify APK signing
+        # ------------------------------------------------------------
+        - name: Verify APK signature
+          shell: bash
+          run: |
+            set -e
+            
+            APK="app/build/outputs/apk/release/app-release.apk"
+            
+            APKSIGNER="$(
+              find "${ANDROID_HOME}/build-tools" \
+                -type f \
+                -name apksigner \
+                | sort -V \
+                | tail -1
+            )"
+            
+            if [ -z "$APKSIGNER" ]; then
+              echo "::error::apksigner was not found."
+              exit 1
+            fi
+            
+            echo "Using:"
+            echo "$APKSIGNER"
+            
+            echo
+            echo "APK signature:"
+            "$APKSIGNER" verify --verbose --print-certs "$APK"
+            
+            echo
+            echo "APK signature verification successful."
+
+        # ------------------------------------------------------------
+        # 13. Verify AAB exists
+        # ------------------------------------------------------------
+        - name: Verify AAB exists
+          shell: bash
+          run: |
+            set -e
+            
+            AAB="app/build/outputs/bundle/release/app-release.aab"
+            
+            if [ ! -f "$AAB" ]; then
+              echo "::error::Release AAB was not generated."
+              exit 1
+            fi
+            
+            echo "AAB found:"
+            ls -lh "$AAB"
+
+        # ------------------------------------------------------------
+        # 14. Create GitHub Release
+        # ------------------------------------------------------------
+        - name: Publish GitHub Release
+          uses: softprops/action-gh-release@v2
+          with:
+            tag_name: ${{ github.ref_name }}
+            name: Ikuriye ${{ env.VERSION_NAME }}
+
+            generate_release_notes: true
+
+            files: |
+              app/build/outputs/apk/release/*.apk
+              app/build/outputs/bundle/release/*.aab
+
+            fail_on_unmatched_files: true
+
+        # ------------------------------------------------------------
+        # 15. Final message
+        # ------------------------------------------------------------
+        - name: Release complete
+          run: |
+            echo "========================================"
+            echo "Ikuriye release completed successfully"
+            echo "Version: $VERSION_NAME"
+            echo "Version code: $VERSION_CODE"
+            echo "Tag: $GITHUB_REF_NAME"
+            echo "========================================"
