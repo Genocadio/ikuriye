@@ -597,7 +597,7 @@ class TripViewModel : ViewModel() {
 
             val uploadedUrl = com.gocavgo.ikuriye.supa.SupaMedia.uploadMedia(
                 client = com.gocavgo.ikuriye.supa.SupaAuth.client,
-                bucket = "profiles",
+                bucket = BuildConfig.PROFILE_BUCKET,
                 byteArray = byteArray,
                 mimeType = mimeType
             )
@@ -1959,6 +1959,14 @@ class TripViewModel : ViewModel() {
                     )
                 }
                 _toastEvent.emit("Delivery confirmed")
+                // Delivery succeeded — mark the related notice(s) as read so the
+                // notification is "seen" and stops acting as a pending reminder.
+                _state.value.notices
+                    .filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" && it.resourceId == packageUuid }
+                    .forEach { notice ->
+                        autoShownDeliveryNotices.add(notice.viewerNoticeId)
+                        NoticeRepository.markRead(notice)
+                    }
             } else {
                 _toastEvent.emit("Could not confirm delivery. Check the code and try again.")
             }
@@ -1970,7 +1978,15 @@ class TripViewModel : ViewModel() {
      * state so the user can still confirm manually from the tracking screen.
      */
     fun dismissDeliveryConfirmationDialog() {
+        // Keep the code in state so the user can still confirm later from the
+        // tracking screen or by tapping the notification again.
+        _state.value.notices
+            .filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" && it.resourceId == _state.value.deliveryConfirmationPackageUuid }
+            .forEach { autoShownDeliveryNotices.add(it.viewerNoticeId) }
         _state.update { it.copy(showDeliveryConfirmationDialog = false) }
+        viewModelScope.launch {
+            _toastEvent.emit("Delivery not confirmed yet — tap the notification to confirm it later")
+        }
     }
 
     // ── Create Package Form Methods ─────────────────────────────────────────
@@ -2004,7 +2020,7 @@ class TripViewModel : ViewModel() {
         val job = viewModelScope.launch {
             val url = SupaMedia.uploadMedia(
                 client = SupaClient.instance,
-                bucket = "package-media",
+                bucket = BuildConfig.MEDIA_BUCKET,
                 byteArray = byteArray,
                 mimeType = mimeType,
                 onProgress = { progress ->
@@ -2086,6 +2102,36 @@ class TripViewModel : ViewModel() {
      */
     fun openNoticeFromNotification(notice: Notice) {
         dismissNotices()
+
+        // A delivery-initiated notice carries the one-time code. Tapping it should
+        // re-open the delivery-confirmation popup (with the code) instead of just
+        // navigating, so the user can confirm or dismiss from there.
+        if (notice.eventType == "PACKAGE_DELIVERY_INITIATED" && !notice.payload.isNullOrBlank()) {
+            val json = try {
+                JSONObject(notice.payload)
+            } catch (e: Exception) {
+                null
+            }
+            val code = json?.optString("deliveryCode")?.takeIf { it.isNotBlank() }
+            if (code != null && json != null) {
+                val packageUuid = notice.resourceId
+                val trackingCode = json.optString("trackingCode")
+                // Never re-open the popup if the package was already delivered.
+                val pkg = findClientPackageForDelivery(packageUuid, trackingCode)
+                if (pkg?.status != PackageStatus.DELIVERED) {
+                    _state.update {
+                        it.copy(
+                            showDeliveryConfirmationDialog = true,
+                            deliveryConfirmationPackageUuid = packageUuid,
+                            deliveryConfirmationCode = code,
+                            deliveryConfirmationTrackingCode = trackingCode,
+                            deliveryConfirmationRecipientName = pkg?.recipientName ?: ""
+                        )
+                    }
+                    return
+                }
+            }
+        }
 
         // Mark the notice as read (optimistic local update + Supabase notice_viewer write)
         viewModelScope.launch {
@@ -2171,9 +2217,10 @@ class TripViewModel : ViewModel() {
         } catch (e: Exception) {
             ""
         }
-        val pkg = _state.value.clientPackages.find {
-            it.packageUuid == packageUuid || (trackingCode.isNotBlank() && it.trackingCode == trackingCode)
-        }
+        val pkg = findClientPackageForDelivery(packageUuid, trackingCode)
+        // Never auto-pop if the package has already been delivered (e.g. the user
+        // confirmed earlier from the tracking screen and the notice is still unread).
+        if (pkg?.status == PackageStatus.DELIVERED) return
 
         autoShownDeliveryNotices.add(notice.viewerNoticeId)
         _state.update {
@@ -2186,4 +2233,13 @@ class TripViewModel : ViewModel() {
             )
         }
     }
+
+    /**
+     * Finds the locally-cached client package matching a delivery notice, matched
+     * by package UUID or tracking code (whichever the notice payload carries).
+     */
+    private fun findClientPackageForDelivery(packageUuid: String, trackingCode: String): ClientPackage? =
+        _state.value.clientPackages.find {
+            it.packageUuid == packageUuid || (trackingCode.isNotBlank() && it.trackingCode == trackingCode)
+        }
 }

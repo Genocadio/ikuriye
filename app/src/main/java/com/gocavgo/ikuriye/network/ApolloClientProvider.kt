@@ -34,7 +34,7 @@ object ApolloClientProvider {
             .build()
 
         ApolloClient.Builder()
-            .serverUrl("https://api.med.rw/deliveries/graphql")
+            .serverUrl(BuildConfig.GRAPHQL_URL)
             .httpEngine(DefaultHttpEngine(okHttpClient))
             .addHttpInterceptor(object : HttpInterceptor {
                 override suspend fun intercept(request: HttpRequest, chain: HttpInterceptorChain): HttpResponse {

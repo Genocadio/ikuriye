@@ -15,4 +15,8 @@
 .idea
 .freebuff
 local.properties
+*.jks
+*.keystore
+secrets.properties
+# typo-prone variant of secrets.properties — still secret
 secrets.properties

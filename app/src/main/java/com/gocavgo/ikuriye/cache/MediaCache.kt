@@ -4,7 +4,12 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -19,6 +24,13 @@ class MediaCache private constructor(appContext: Context) {
         private const val INDEX_FILE = "index.json"
         private const val EXPIRY_MS = 24 * 60 * 60 * 1000L
         private const val MAX_RETRIES = 2
+        // Bounded cache: prevents unbounded index growth on media-heavy packages.
+        private const val MAX_ENTRIES = 200
+        // Cap parallel downloads so a 20-photo package doesn't thrash the network.
+        private const val MAX_CONCURRENT_DOWNLOADS = 3
+        // Debounce for async LRU-touch persistence: waits this long after the last
+        // touch before writing the index, coalescing scroll bursts into one write.
+        private const val PERSIST_DEBOUNCE_MS = 1_000L
 
         @Volatile
         private var instance: MediaCache? = null
@@ -44,6 +56,15 @@ class MediaCache private constructor(appContext: Context) {
     // of the same URL (which would corrupt the file on disk).
     private val downloading = mutableSetOf<String>()
 
+    // Global cap on simultaneous downloads (separate from per-URL dedup).
+    private val downloadSemaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+    // App-lifetime scope for background index persistence (LRU touches).
+    private val persistScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Pending debounced persist job — reused across rapid touches.
+    private var pendingPersist: Job? = null
+
     init {
         cacheDir.mkdirs()
         loadIndex()
@@ -64,6 +85,9 @@ class MediaCache private constructor(appContext: Context) {
                 Log.d("MediaCache", "STALE $url — file deleted from disk, removing index")
                 return null
             }
+            // True LRU: touch last-access time so capacity eviction and expiry
+            // evict the least-recently-USED entries, not the oldest-inserted.
+            touch(url, entry)
             Log.d("MediaCache", "HIT   $url → ${file.name}")
             return file
         }
@@ -76,6 +100,7 @@ class MediaCache private constructor(appContext: Context) {
             if (existing != null) {
                 val f = File(existing.localPath)
                 if (f.exists()) {
+                    touch(url, existing)
                     Log.d("MediaCache", "REUSE $url → ${f.name}")
                     return@withContext f
                 } else index.remove(url)
@@ -119,6 +144,8 @@ class MediaCache private constructor(appContext: Context) {
                     val connection = URL(url).openConnection()
                     connection.connectTimeout = 15000
                     connection.readTimeout = 30000
+                    // Some CDNs / WAFs reject requests without a User-Agent.
+                    connection.setRequestProperty("User-Agent", "Ikuriye/1.0 (Android)")
                     connection.getInputStream().use { input ->
                         file.outputStream().use { output ->
                             input.copyTo(output)
@@ -128,6 +155,7 @@ class MediaCache private constructor(appContext: Context) {
                     Log.d("MediaCache", "DONE  $shortUrl → ${file.name} (${size} bytes, attempt $attempt)")
                     synchronized(this@MediaCache) {
                         index[url] = CacheEntry(url, file.absolutePath, System.currentTimeMillis())
+                        trimToCapacity()
                         saveIndex()
                     }
                     return@withContext file
@@ -160,6 +188,7 @@ class MediaCache private constructor(appContext: Context) {
         }
         synchronized(this) {
             index[url] = CacheEntry(url, file.absolutePath, System.currentTimeMillis())
+            trimToCapacity()
             saveIndex()
         }
         Log.d("MediaCache", "CACHE_BYTES $url → ${file.name} (${byteArray.size} bytes)")
@@ -176,9 +205,68 @@ class MediaCache private constructor(appContext: Context) {
         Log.d("MediaCache", "PRELOAD ${toDownload.size}/${urls.size} uncached URLs")
         toDownload.forEach { url ->
             scope.launch {
-                try { cacheMedia(url) } catch (_: Exception) {}
+                try {
+                    // Global concurrency cap — cacheMedia itself also dedupes per-URL.
+                    downloadSemaphore.withPermit {
+                        cacheMedia(url)
+                    }
+                } catch (_: Exception) {}
             }
         }
+    }
+
+    /**
+     * True-LRU touch: refreshes an entry's [CacheEntry.cachedAt] to now so it
+     * counts as recently used. Caller must hold the lock (called from within
+     * synchronized blocks). Persisted asynchronously on [Dispatchers.IO] via a
+     * debounced [pendingPersist] job, so the LRU order survives process death
+     * without doing disk I/O on the main thread (where [getCachedFile] runs).
+     */
+    private fun touch(url: String, entry: CacheEntry) {
+        val now = System.currentTimeMillis()
+        if (now - entry.cachedAt < 1_000L) return // touched within the last second — skip
+        index[url] = entry.copy(cachedAt = now)
+        schedulePersist()
+    }
+
+    /**
+     * Schedules a debounced index write on [Dispatchers.IO]. Rapid touches within
+     * [PERSIST_DEBOUNCE_MS] coalesce into a single write. Must be called while
+     * holding the lock (touch is called inside synchronized blocks); the write
+     * itself re-acquires the lock to serialize with other index writes.
+     *
+     * The job nulls out [pendingPersist] inside the lock so every read/write of
+     * it happens under the same monitor — closing a tiny race where a touch
+     * landing right after the job released the lock (but before it was marked
+     * completed) would otherwise be skipped and never persisted.
+     */
+    private fun schedulePersist() {
+        if (pendingPersist?.isActive == true) return // a debounce is already running
+        pendingPersist = persistScope.launch {
+            delay(PERSIST_DEBOUNCE_MS)
+            synchronized(this@MediaCache) {
+                pendingPersist = null
+                saveIndex()
+            }
+        }
+    }
+
+    /**
+     * Keeps the cache bounded: evicts the least-recently-used entries (by
+     * [CacheEntry.cachedAt], which is touched on every access) once
+     * [MAX_ENTRIES] is exceeded, deleting their files from disk. Caller must
+     * hold the lock (called from within synchronized blocks).
+     */
+    private fun trimToCapacity() {
+        if (index.size <= MAX_ENTRIES) return
+        val overflow = index.size - MAX_ENTRIES
+        val lru = index.values.sortedBy { it.cachedAt }.take(overflow)
+        lru.forEach { entry ->
+            File(entry.localPath).delete()
+            index.remove(entry.url)
+            Log.d("MediaCache", "TRIM evict ${entry.url.take(60)}")
+        }
+        Log.d("MediaCache", "TRIM done: ${lru.size} entries evicted (cache now ${index.size})")
     }
 
     private fun loadIndex() {

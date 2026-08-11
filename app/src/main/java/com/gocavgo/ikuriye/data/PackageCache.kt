@@ -11,6 +11,11 @@ object PackageCache {
     private const val TAG = "PackageCache"
     private const val CACHE_FILE = "my_packages_page0.json"
     private const val EXPIRY_MS = 60 * 60 * 1000L
+    // Touch-on-access throttle: rewrite cachedAt at most this often, so an
+    // actively-used cache keeps extending its expiry without rewriting the file
+    // on every read. Note: unlike MediaCache, all getCached() callers run on
+    // Dispatchers.IO (verified in TripViewModel), so writing here is safe.
+    private const val TOUCH_THROTTLE_MS = 5 * 60 * 1000L
 
     private var cacheDir: File? = null
 
@@ -37,6 +42,11 @@ object PackageCache {
             for (i in 0 until itemsArr.length()) {
                 items.add(packageFromJson(itemsArr.getJSONObject(i)))
             }
+            // Touch-on-access: keep the cache "fresh" while it's being used, so a
+            // cache that gets read regularly doesn't expire while the user is
+            // browsing (same pattern as MediaCache, persisted here because callers
+            // are already on Dispatchers.IO).
+            touch(file, json, cachedAt)
             Log.d(TAG, "Cache hit: ${items.size} packages")
             PagedResult(
                 items = items,
@@ -75,6 +85,25 @@ object PackageCache {
     fun clear() {
         cacheDir?.let {
             File(it, CACHE_FILE).delete()
+        }
+    }
+
+    /**
+     * Extends the cache's expiry window by rewriting cachedAt to now, throttled
+     * to [TOUCH_THROTTLE_MS] to avoid rewriting on every read. Reuses the already-
+     * parsed [json] from [getCached] — no extra file read. Best-effort: a failed
+     * rewrite is logged and ignored, so a touch failure can never turn a valid
+     * cache hit into a miss (the outer catch in [getCached] would delete the file).
+     */
+    private fun touch(file: File, json: JSONObject, cachedAt: Long) {
+        val now = System.currentTimeMillis()
+        if (now - cachedAt < TOUCH_THROTTLE_MS) return
+        try {
+            json.put("cachedAt", now)
+            file.writeText(json.toString())
+            Log.d(TAG, "Cache touched (expiry extended)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to touch cache", e)
         }
     }
 

@@ -17,6 +17,20 @@ import kotlinx.coroutines.SupervisorJob
 
 object SupaClient {
 
+    /**
+     * Fail fast with an actionable message instead of a cryptic connection error
+     * when the project isn't configured. See `secrets.properties.example`.
+     * Called from every client-creation path ([instance] and [createSupabaseClient]).
+     */
+    private fun requireConfigured(supabaseUrl: String, supabaseKey: String) {
+        check(supabaseUrl.isNotBlank()) {
+            "SUPABASE_URL is empty. Copy secrets.properties.example to secrets.properties and set SUPABASE_URL, then rebuild."
+        }
+        check(supabaseKey.isNotBlank()) {
+            "SUPABASE_KEY is empty. Copy secrets.properties.example to secrets.properties and set SUPABASE_KEY, then rebuild."
+        }
+    }
+
     @OptIn(SupabaseInternal::class)
     val instance: SupabaseClient by lazy { createSupabaseClient() }
 
@@ -26,6 +40,7 @@ object SupaClient {
         supabaseKey: String = BuildConfig.SUPABASE_KEY,
         sessionManager: SessionManager? = null
     ): SupabaseClient {
+        requireConfigured(supabaseUrl, supabaseKey)
         return createSupabaseClient(
             supabaseUrl = supabaseUrl,
             supabaseKey = supabaseKey

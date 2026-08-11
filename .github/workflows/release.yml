@@ -1,0 +1,106 @@
+name: Release
+
+# Builds a signed production release and publishes it to GitHub Releases
+# whenever a version tag (e.g. v1.2.3) is pushed.
+#
+# Required GitHub secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL, SUPABASE_KEY, GRAPHQL_URL    — backend config
+#   MEDIA_BUCKET, PROFILE_BUCKET               — optional (sane defaults exist)
+#   KEYSTORE_BASE64                            — base64 of your release .jks keystore
+#   KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD — keystore credentials
+#
+# Generate a keystore once locally, then upload it as a secret:
+#   keytool -genkey -v -keystore release.jks -alias <alias> -keyalg RSA \
+#     -keysize 2048 -validity 10000
+#   base64 -i release.jks -o release.jks.b64   # macOS
+#   base64 -w0 release.jks                     # Linux, then paste the output
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the GitHub Release + upload assets
+
+jobs:
+  release:
+    name: Build & publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (full history for versionCode)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Accept Android SDK licenses
+        run: |
+          if [ -n "${ANDROID_HOME}" ] && [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          fi
+
+      - name: Check required secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GRAPHQL_URL: ${{ secrets.GRAPHQL_URL }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=""
+          for var in SUPABASE_URL SUPABASE_KEY GRAPHQL_URL KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!var}" ]; then missing="$missing $var"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required GitHub secrets:$missing — add them in Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+
+      - name: Compute version from tag
+        run: |
+          echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Build signed release APK & AAB
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GRAPHQL_URL: ${{ secrets.GRAPHQL_URL }}
+          MEDIA_BUCKET: ${{ secrets.MEDIA_BUCKET }}
+          PROFILE_BUCKET: ${{ secrets.PROFILE_BUCKET }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease :app:bundleRelease
+
+      - name: Verify APK is signed
+        run: |
+          APKSIGNER=$(find "${ANDROID_HOME}/build-tools" -name apksigner -type f | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then echo "::error::apksigner not found"; exit 1; fi
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ env.VERSION_NAME }}
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
+          generate_release_notes: true

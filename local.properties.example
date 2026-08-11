@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  local.properties — machine-specific build config (git-ignored)
+#
+#  How to use:
+#    1. Copy this file to `local.properties` (project root):
+#         cp local.properties.example local.properties
+#    2. Point sdk.dir at your Android SDK installation.
+#
+#  macOS (Android Studio default):
+#       sdk.dir=/Users/<you>/Library/Android/sdk
+#  Linux:
+#       sdk.dir=/home/<you>/Android/Sdk
+#  Windows (escape backslashes or use forward slashes):
+#       sdk.dir=C:/Users/<you>/AppData/Local/Android/Sdk
+# ─────────────────────────────────────────────────────────────────────────────
+sdk.dir=
