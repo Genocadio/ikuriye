@@ -13,7 +13,9 @@ import com.gocavgo.ikuriye.data.PackageRepository
 import com.gocavgo.ikuriye.data.Notice
 import com.gocavgo.ikuriye.data.NoticeRepository
 import com.gocavgo.ikuriye.data.PackageStatus
+import com.gocavgo.ikuriye.data.PagedResult
 import com.gocavgo.ikuriye.data.StatusUpdate
+import com.gocavgo.ikuriye.data.shouldAutoShowDeliveryConfirmation
 import com.gocavgo.ikuriye.type.CreatePackageInput
 import com.gocavgo.ikuriye.type.DeliveryType
 import com.gocavgo.ikuriye.type.DetailInput
@@ -55,8 +57,11 @@ class TripViewModel : ViewModel() {
     // ── New package subscription (driver-side real-time) ────────────────────
     private var subscriptionJob: kotlinx.coroutines.Job? = null
 
-    // Notice IDs whose delivery-confirmation popup was already shown once
-    private val autoShownDeliveryNotices = mutableSetOf<String>()
+    // Notice IDs whose delivery-confirmation popup was already shown once.
+    // Seeded from SharedPreferences so a popup that was confirmed or dismissed
+    // does not reappear after the app is killed and reopened.
+    private val autoShownDeliveryNotices =
+        SettingsRepository.getAutoShownDeliveryNotices().toMutableSet()
 
     init {
         // ── Listen for JWT session expiry events — force logout ──
@@ -454,6 +459,7 @@ class TripViewModel : ViewModel() {
     fun logout() {
         NoticeRepository.stop()
         stopPackageSubscription()
+        autoShownDeliveryNotices.clear()
         viewModelScope.launch {
             AuthRepository.signOut()
         }
@@ -1004,6 +1010,7 @@ class TripViewModel : ViewModel() {
 
     fun clientLogout() {
         NoticeRepository.stop()
+        autoShownDeliveryNotices.clear()
         viewModelScope.launch {
             AuthRepository.signOut()
         }
@@ -1958,6 +1965,23 @@ class TripViewModel : ViewModel() {
                         deliveryConfirmationTrackingCode = ""
                     )
                 }
+                // Persist the DELIVERED state so a stale package cache can't
+                // re-trigger the popup on the next app launch. Only save when
+                // there are items, so a transient empty list can't clobber the
+                // warm-up cache.
+                val s = _state.value
+                if (s.clientPackages.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        PackageCache.save(
+                            PagedResult(
+                                items = s.clientPackages,
+                                totalCount = s.clientTotalCount,
+                                totalPages = s.clientTotalPages,
+                                currentPage = s.clientCurrentPage
+                            )
+                        )
+                    }
+                }
                 _toastEvent.emit("Delivery confirmed")
                 // Delivery succeeded — mark the related notice(s) as read so the
                 // notification is "seen" and stops acting as a pending reminder.
@@ -1965,6 +1989,7 @@ class TripViewModel : ViewModel() {
                     .filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" && it.resourceId == packageUuid }
                     .forEach { notice ->
                         autoShownDeliveryNotices.add(notice.viewerNoticeId)
+                        SettingsRepository.addAutoShownDeliveryNotice(notice.viewerNoticeId)
                         NoticeRepository.markRead(notice)
                     }
             } else {
@@ -1982,7 +2007,10 @@ class TripViewModel : ViewModel() {
         // tracking screen or by tapping the notification again.
         _state.value.notices
             .filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" && it.resourceId == _state.value.deliveryConfirmationPackageUuid }
-            .forEach { autoShownDeliveryNotices.add(it.viewerNoticeId) }
+            .forEach { notice ->
+                autoShownDeliveryNotices.add(notice.viewerNoticeId)
+                SettingsRepository.addAutoShownDeliveryNotice(notice.viewerNoticeId)
+            }
         _state.update { it.copy(showDeliveryConfirmationDialog = false) }
         viewModelScope.launch {
             _toastEvent.emit("Delivery not confirmed yet — tap the notification to confirm it later")
@@ -2202,7 +2230,6 @@ class TripViewModel : ViewModel() {
         val notice = notices
             .filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" }
             .maxByOrNull { it.createdAt } ?: return
-        if (notice.viewerNoticeId in autoShownDeliveryNotices) return
 
         val payload = notice.payload ?: return
         val code = try {
@@ -2218,11 +2245,13 @@ class TripViewModel : ViewModel() {
             ""
         }
         val pkg = findClientPackageForDelivery(packageUuid, trackingCode)
-        // Never auto-pop if the package has already been delivered (e.g. the user
-        // confirmed earlier from the tracking screen and the notice is still unread).
-        if (pkg?.status == PackageStatus.DELIVERED) return
+        // Pure gate — never re-pop for a notice that was already auto-shown,
+        // already read, or whose package is already DELIVERED. Unit-tested in
+        // DeliveryConfirmationGateTest (confirm → kill → reopen scenario).
+        if (!shouldAutoShowDeliveryConfirmation(notice, autoShownDeliveryNotices, pkg?.status)) return
 
         autoShownDeliveryNotices.add(notice.viewerNoticeId)
+        SettingsRepository.addAutoShownDeliveryNotice(notice.viewerNoticeId)
         _state.update {
             it.copy(
                 showDeliveryConfirmationDialog = true,

@@ -2,11 +2,11 @@ package com.gocavgo.ikuriye.data
 
 import android.util.Log
 import com.gocavgo.ikuriye.BuildConfig
+import com.gocavgo.ikuriye.MarkNoticeReadMutation
 import com.gocavgo.ikuriye.MyNoticesQuery
 import com.gocavgo.ikuriye.UnreadCountQuery
 import com.gocavgo.ikuriye.network.ApolloClientProvider
 import com.gocavgo.ikuriye.supa.SupaAuth
-import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.RealtimeChannel
@@ -55,9 +55,8 @@ data class Notice(
  *    table) for near-instant delivery
  * 3. Background polling at 30s intervals as a safety net (missed events,
  *    updates, reconnect gaps)
- * 4. Mark-as-read is written directly to the Supabase `notice_viewer`
- *    table via Postgrest (the GraphQL `markNoticeRead` mutation does not
- *    exist on the backend — it fails with `FieldUndefined`), with an
+ * 4. Mark-as-read goes through the backend `markNoticeRead` GraphQL mutation
+ *    (writes `read_at` on the `notice_viewers` row server-side), with an
  *    optimistic local update first.
  *
  * Usage: Call [start] after login/session restore with the ViewModel's scope.
@@ -282,63 +281,36 @@ object NoticeRepository {
 
     /**
      * Mark a single notice as read — optimistic local update, then persisted
-     * by directly updating the Supabase `notice_viewer` row via Postgrest
-     * (the GraphQL `markNoticeRead` mutation does not exist on the backend).
-     *
-     * The row is matched by its natural key (`notice_id` + `user_id`), not by
-     * `id`: the GraphQL `NoticeViewer.id` is the backend's own identifier and
-     * does not reliably equal the Supabase `notice_viewers.id` primary key.
+     * through the backend `markNoticeRead` GraphQL mutation (which writes
+     * `read_at` on the `notice_viewers` row server-side).
      */
     suspend fun markRead(notice: Notice) {
         val viewerId = notice.viewerId
-        val noticeId = notice.viewerNoticeId
-        val userId = SupaAuth.getCurrentUserId()
         _notices.update { list ->
             applyMarkRead(list, viewerId).sortedBy { it.viewerReadAt != null }
         }
         _unreadCount.value = (_unreadCount.value - 1).coerceAtLeast(0)
 
-        val readAt = java.time.Instant.now().toString()
         try {
-            // `select()` makes PostgREST return the updated rows (representation),
-            // so `rows` reveals whether any row actually matched the filter.
-            val result = SupaAuth.client.postgrest
-                .from(NOTICE_VIEWER_TABLE)
-                .update(
-                    { set("read_at", readAt) }
-                ) {
-                    select()
-                    filter { eq("notice_id", noticeId) }
-                    if (userId != null) filter { eq("user_id", userId) }
-                }
-            if (BuildConfig.DEBUG) {
-                Log.d(TAG, "markRead: postgrest update notice_id=$noticeId user_id=$userId read_at=$readAt | rows=${result.data}")
-                if (result.data.trim() == "[]") {
-                    // No row matched. Distinguish a bad filter from an RLS block:
-                    // a plain SELECT that finds the row means the UPDATE is blocked
-                    // by the table's policies.
-                    try {
-                        val rows = SupaAuth.client.postgrest
-                            .from(NOTICE_VIEWER_TABLE)
-                            .select {
-                                filter { eq("notice_id", noticeId) }
-                                limit(5)
-                            }
-                        Log.d(TAG, "markRead: diagnostic select by notice_id=$noticeId -> ${rows.data}")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "markRead: diagnostic select failed — ${e.message}", e)
-                    }
-                }
+            val response = ApolloClientProvider.client
+                .mutation(MarkNoticeReadMutation(viewerId = viewerId))
+                .execute()
+            if (response.errors != null && response.errors!!.isNotEmpty()) {
+                Log.e(TAG, "markRead: GraphQL errors — ${response.errors!!.joinToString { it.message ?: "" }}")
+                return
             }
-            _notices.update { list ->
-                list.map { n ->
-                    if (n.viewerId == viewerId) n.copy(viewerReadAt = readAt) else n
-                }.sortedBy { it.viewerReadAt != null }
+            val readAt = response.data?.markNoticeRead?.readAt
+            if (readAt != null) {
+                _notices.update { list ->
+                    list.map { n ->
+                        if (n.viewerId == viewerId) n.copy(viewerReadAt = readAt) else n
+                    }.sortedBy { it.viewerReadAt != null }
+                }
             }
         } catch (e: Exception) {
             // Persist failed — the optimistic update above stays, so the UI will
             // appear read until the next fetch returns the server state (unread).
-            Log.e(TAG, "markRead: postgrest update failed for viewerId=$viewerId — ${e.message}", e)
+            Log.e(TAG, "markRead: mutation failed for viewerId=$viewerId — ${e.message}", e)
         }
     }
 }

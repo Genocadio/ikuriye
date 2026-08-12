@@ -78,11 +78,6 @@ input AssignDriverInput {
   assignedBy: ID!
 
   """
-  Handover token from the previous custodian. Required for custody transfer.
-  """
-  handoverToken: String!
-
-  """
   Optional notes about the assignment
   """
   notes: String
@@ -540,7 +535,7 @@ type Mutation {
   disableUser(userId: ID!): User!
 
   """
-  Create a new delivery package. WORKER and DRIVER creators become the first custodian. CUSTOMER creators are not custodians. Returns a one-time handover token. If transferRuleType is provided, automatically creates a transfer with this package.
+  Create a new delivery package. WORKER and DRIVER creators become the first custodian. CUSTOMER creators are not custodians. If transferRuleType is provided, automatically creates a transfer with this package.
   """
   createPackage(input: CreatePackageInput!): PackageCreation!
 
@@ -555,7 +550,7 @@ type Mutation {
   assignDriver(input: AssignDriverInput!): DeliveryPackage!
 
   """
-  Advance a package to the next status. Validates state-machine transitions, pickup codes (for COMPLETED), and handover tokens (for custody transfers).
+  Advance a package to the next status. Validates state-machine transitions and pickup codes (for COMPLETED).
   """
   updatePackageStatus(input: UpdatePackageStatusInput!): DeliveryPackage!
 
@@ -623,6 +618,11 @@ type Mutation {
   Reject a REQUESTED CONFIRM transfer. Only the transfer owner can reject. Resets status back to PENDING and clears requestor.
   """
   rejectTransfer(transferId: ID!): Transfer!
+
+  """
+  Mark a notice as read for the authenticated user. Pass the viewer id returned by myNotices.
+  """
+  markNoticeRead(viewerId: ID!): NoticeViewer!
 }
 
 """
@@ -711,18 +711,13 @@ type NoticeViewer {
 }
 
 """
-Return type for createPackage mutation. Contains the created package, one-time handover token, and optional transfer.
+Return type for createPackage mutation. Contains the created package and optional transfer.
 """
 type PackageCreation {
   """
   The created delivery package
   """
   deliveryPackage: DeliveryPackage!
-
-  """
-  One-time handover token — required for subsequent custody transfers. Store securely, only returned once.
-  """
-  handoverToken: String!
 
   """
   Optional transfer auto-created with the package. Present when transferRuleType was provided in CreatePackageInput.
@@ -1442,11 +1437,6 @@ input UpdatePackageStatusInput {
   Target status — must be a valid transition from the current status
   """
   status: PackageStatus!
-
-  """
-  Handover token for custody transfer (required for PICKED_UP transition)
-  """
-  handoverToken: String
 
   """
   Six-digit pickup code (required for COMPLETED transition)

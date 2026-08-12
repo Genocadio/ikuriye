@@ -1,0 +1,9 @@
+mutation MarkNoticeRead($viewerId: ID!) {
+  markNoticeRead(viewerId: $viewerId) {
+    id
+    noticeId
+    userId
+    deliveredAt
+    readAt
+  }
+}

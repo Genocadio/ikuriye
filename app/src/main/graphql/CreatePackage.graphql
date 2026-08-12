@@ -49,7 +49,6 @@ mutation CreatePackage($input: CreatePackageInput!) {
       createdAt
       updatedAt
     }
-    handoverToken
     transfer {
       id
       ruleType

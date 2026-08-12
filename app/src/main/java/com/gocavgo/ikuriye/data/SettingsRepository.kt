@@ -13,6 +13,7 @@ object SettingsRepository {
     private const val KEY_PIP_ENABLED     = "settings_pip_enabled"
     private const val KEY_RESUME_SCREEN   = "resume_screen_key"
     private const val KEY_RESUME_PKG_ID   = "resume_package_id"
+    private const val KEY_AUTO_SHOWN_DELIVERY = "auto_shown_delivery_notices"
 
     private var prefs: SharedPreferences? = null
 
@@ -36,6 +37,25 @@ object SettingsRepository {
 
     fun getPipEnabled(): Boolean =
         prefs?.getBoolean(KEY_PIP_ENABLED, false) ?: false
+
+    // ── Auto-shown delivery-notice popup ids ─────────────────────────────────
+    // Persisted so a delivery-confirmation popup that was already shown once
+    // (confirmed OR dismissed) does not reappear after the app is killed and
+    // reopened — the in-memory set alone would be lost on process death.
+    private const val MAX_AUTO_SHOWN_DELIVERY = 50
+
+    // Returns a defensive copy: the SharedPreferences StringSet instance must
+    // never be modified by callers.
+    fun getAutoShownDeliveryNotices(): Set<String> =
+        prefs?.getStringSet(KEY_AUTO_SHOWN_DELIVERY, emptySet())?.toSet() ?: emptySet()
+
+    fun addAutoShownDeliveryNotice(noticeId: String) {
+        val p = prefs ?: return
+        val current = p.getStringSet(KEY_AUTO_SHOWN_DELIVERY, emptySet()) ?: emptySet()
+        // Cap the set so it can't grow unboundedly across a user's lifetime.
+        val updated = (current + noticeId).toList().takeLast(MAX_AUTO_SHOWN_DELIVERY).toSet()
+        p.edit().putStringSet(KEY_AUTO_SHOWN_DELIVERY, updated).apply()
+    }
 
     // ── Resume State ──────────────────────────────────────────────────────────
 
@@ -91,6 +111,7 @@ object SettingsRepository {
             ?.remove(KEY_PIP_ENABLED)
             ?.remove(KEY_RESUME_SCREEN)
             ?.remove(KEY_RESUME_PKG_ID)
+            ?.remove(KEY_AUTO_SHOWN_DELIVERY)
             ?.remove("resume_tracking_code")
             ?.apply()
     }
