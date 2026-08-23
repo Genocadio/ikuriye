@@ -69,11 +69,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Backend endpoints & storage buckets — overridable via secrets.properties
+        // Supabase is used for FILE UPLOADS ONLY — auth is handled by Nexxauth.
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "")}\"")
         buildConfigField("String", "SUPABASE_KEY", "\"${secret("SUPABASE_KEY", "")}\"")
         buildConfigField("String", "GRAPHQL_URL", "\"${secret("GRAPHQL_URL", "https://api.med.rw/deliveries/graphql")}\"")
         buildConfigField("String", "MEDIA_BUCKET", "\"${secret("MEDIA_BUCKET", "package-media")}\"")
         buildConfigField("String", "PROFILE_BUCKET", "\"${secret("PROFILE_BUCKET", "profiles")}\"")
+        // Nexxauth — identity provider. Base URL includes the platform slug:
+        // https://auth.med.rw/master. Client key from the ANDROID client in the
+        // Nexxauth console; org slug matches the organisation registered there.
+        buildConfigField("String", "NEXXAUTH_BASE_URL", "\"${secret("NEXXAUTH_BASE_URL", "https://auth.med.rw/master")}\"")
+        buildConfigField("String", "NEXXAUTH_CLIENT_ID", "\"${secret("NEXXAUTH_CLIENT_ID", "")}\"")
     }
 
     signingConfigs {
@@ -132,13 +138,11 @@ android {
 
 dependencies {
 
-    // supabase
+    // supabase — STORAGE ONLY (file uploads). Auth/Postgrest/Realtime are gone;
+    // authentication is handled by Nexxauth.
     implementation(platform(libs.supabase.bom))
     implementation(libs.androidx.compose.foundation)
-    implementation(libs.supabase.postgrest.kt)
-    implementation(libs.supabase.auth.kt)
-    implementation("io.github.jan-tennert.supabase:storage-kt")
-    implementation("io.github.jan-tennert.supabase:realtime-kt")
+    implementation(libs.supabase.storage.kt)
     implementation("io.ktor:ktor-client-okhttp:3.5.2")
     implementation("androidx.camera:camera-camera2:1.6.1")
     implementation("androidx.camera:camera-lifecycle:1.6.1")

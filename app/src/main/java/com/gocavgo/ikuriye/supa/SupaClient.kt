@@ -3,24 +3,21 @@ package com.gocavgo.ikuriye.supa
 import com.gocavgo.ikuriye.BuildConfig
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.annotations.SupabaseInternal
-import io.github.jan.supabase.auth.Auth
-import io.github.jan.supabase.auth.SessionManager
-import io.github.jan.supabase.postgrest.Postgrest
-import io.github.jan.supabase.realtime.Realtime
-import io.github.jan.supabase.storage.Storage
 import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.storage.Storage
 import io.ktor.client.engine.okhttp.OkHttp
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 
+/**
+ * Supabase client — used for **file uploads only**. Auth (GoTrue), Postgrest
+ * and Realtime are no longer installed: authentication is handled by Nexxauth,
+ * notices come through GraphQL polling, and the backend owns the data.
+ */
 object SupaClient {
 
     /**
      * Fail fast with an actionable message instead of a cryptic connection error
      * when the project isn't configured. See `secrets.properties.example`.
-     * Called from every client-creation path ([instance] and [createSupabaseClient]).
      */
     private fun requireConfigured(supabaseUrl: String, supabaseKey: String) {
         check(supabaseUrl.isNotBlank()) {
@@ -37,8 +34,7 @@ object SupaClient {
     @OptIn(SupabaseInternal::class)
     fun createSupabaseClient(
         supabaseUrl: String = BuildConfig.SUPABASE_URL,
-        supabaseKey: String = BuildConfig.SUPABASE_KEY,
-        sessionManager: SessionManager? = null
+        supabaseKey: String = BuildConfig.SUPABASE_KEY
     ): SupabaseClient {
         requireConfigured(supabaseUrl, supabaseKey)
         return createSupabaseClient(
@@ -52,26 +48,7 @@ object SupaClient {
                     writeTimeout(120, TimeUnit.SECONDS)
                 }
             }
-            install(Auth) {
-                autoSetupPlatform = false
-                // Proactively refresh the token before expiry so GraphQL requests
-                // never encounter a 401. The SDK internally checks expiry and
-                // calls refreshCurrentSession() when the token is near expiration.
-                alwaysAutoRefresh = true
-
-                // Delegate session persistence to our custom SessionManager
-                if (sessionManager != null) {
-                    this.sessionManager = sessionManager
-                }
-                autoSaveToStorage = true
-                autoLoadFromStorage = true
-
-                // Provide a scope for the SDK's internal async operations
-                authScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-            }
             install(Storage)
-            install(Postgrest)
-            install(Realtime)
         }
     }
 }

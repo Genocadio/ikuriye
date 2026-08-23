@@ -95,7 +95,7 @@ fun LoginScreen(
                     value = email,
                     onValueChange = { email = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Email") },
+                    label = { Text("Email or Phone") },
                     leadingIcon = { Icon(Icons.Filled.Person, null) },
                     singleLine = true,
                     enabled = !isAuthLoading,
@@ -197,15 +197,10 @@ fun ForgotPasswordDialog(
             Column {
                 when (step) {
                     0 -> {
-                        OutlinedTextField(
-                            value = email,
-                            onValueChange = { email = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Email address") },
-                            leadingIcon = { Icon(Icons.Filled.Email, null) },
-                            singleLine = true,
-                            enabled = !isLoading,
-                            shape = RoundedCornerShape(12.dp)
+                        Text(
+                            "Self-service password reset is not available yet. Ask your administrator to set a temporary password for your account — you will be asked to create a new one on your next login.",
+                            color = colors.textSecondary,
+                            fontSize = 14.sp
                         )
                     }
                     1 -> {
@@ -267,17 +262,8 @@ fun ForgotPasswordDialog(
         },
         confirmButton = {
             when (step) {
-                0 -> Button(
-                    onClick = { onSendCode(email.trim()) },
-                    enabled = email.isNotBlank() && !isLoading,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = colors.blue)
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                    } else {
-                        Text("Send Code", fontWeight = FontWeight.Bold)
-                    }
+                0 -> TextButton(onClick = onDismiss) {
+                    Text("OK", color = colors.blue, fontWeight = FontWeight.Bold)
                 }
                 1 -> Button(
                     onClick = { onResetPassword(code.trim(), newPassword) },
@@ -319,6 +305,7 @@ fun ProfileScreen(
     var name by remember(authUser) { mutableStateOf(authUser?.let { "${it.firstName ?: ""} ${it.lastName ?: ""}".trim() } ?: profile.name) }
     var phone by remember(authUser) { mutableStateOf(PhoneValidation.toDisplayFormat(authUser?.phone ?: profile.phone)) }
     var username by remember(authUser) { mutableStateOf(authUser?.username ?: "") }
+    var currentPassword by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
     var isEditing by remember { mutableStateOf(false) }
@@ -573,6 +560,16 @@ fun ProfileScreen(
                 Text("Security", color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
+                    value = currentPassword,
+                    onValueChange = { currentPassword = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Current Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
                     modifier = Modifier.fillMaxWidth(),
@@ -584,13 +581,14 @@ fun ProfileScreen(
                 Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = {
-                        viewModel.updatePassword(password)
+                        viewModel.updatePassword(currentPassword, password)
+                        currentPassword = ""
                         password = ""
                     },
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = colors.surfaceAlt, contentColor = colors.textPrimary),
-                    enabled = password.length >= 6 && !state.isUpdatingProfile
+                    enabled = currentPassword.isNotBlank() && password.length >= 6 && !state.isUpdatingProfile
                 ) {
                     if (state.isUpdatingProfile) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.textSecondary)

@@ -14,14 +14,20 @@ import com.gocavgo.ikuriye.data.dto.SignInInput
 import com.gocavgo.ikuriye.data.dto.SignUpInput
 import com.gocavgo.ikuriye.data.dto.SyncResult
 import com.gocavgo.ikuriye.data.dto.UserStatusDto
+import com.gocavgo.ikuriye.nexx.NexxAuth
 import com.gocavgo.ikuriye.network.ApolloClientProvider
-import com.gocavgo.ikuriye.supa.SupaAuth
-import com.gocavgo.ikuriye.supa.SupaSignUpResult
-import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 
+/**
+ * Auth repository. Authentication is handled by Nexxauth (see [NexxAuth]) —
+ * login/register accept an email OR phone identifier + password. The returned
+ * org-access JWT is sent to the backend GraphQL API, which verifies it offline
+ * and mirrors the profile via `syncUser`.
+ *
+ * Supabase is no longer used for auth — only for file uploads.
+ */
 object AuthRepository {
 
     private const val TAG = "AuthRepository"
@@ -34,22 +40,21 @@ object AuthRepository {
     val sessionExpired: Flow<Unit> = _sessionExpired.receiveAsFlow()
 
     /**
-     * Called whenever the backend (Apollo or Supabase) returns a 401 / bad_jwt.
-     * Clears the cached session and emits an event so the UI can force-logout.
+     * Called whenever the backend (Apollo or Nexxauth) returns a 401 / session
+     * expiry. Clears the cached session and emits an event so the UI can
+     * force-logout.
      */
     fun onSessionExpired() {
-        if (BuildConfig.DEBUG) Log.d(TAG, "onSessionExpired: JWT expired, clearing session")
-        // Clear local caches
+        if (BuildConfig.DEBUG) Log.d(TAG, "onSessionExpired: session expired, clearing")
         clearCachedUser()
-        SupaAuth.clearSessionLocally()
-        // trySend on CONFLATED channel always succeeds (drops oldest if uncollected)
+        NexxAuth.clearSessionLocally()
         _sessionExpired.trySend(Unit)
     }
 
     fun init(context: Context) {
         appContext = context.applicationContext
-        prefs = context.getSharedPreferences("ikuriye_supa", Context.MODE_PRIVATE)
-        SupaAuth.init(context)
+        prefs = context.getSharedPreferences("ikuriye_auth", Context.MODE_PRIVATE)
+        NexxAuth.init(context)
     }
 
     fun isNetworkAvailable(): Boolean {
@@ -91,176 +96,103 @@ object AuthRepository {
 
     fun clearCachedUser() {
         val editor = prefs?.edit() ?: return
-        editor.remove("user_id")
-        editor.remove("user_email")
-        editor.remove("user_phone")
-        editor.remove("user_first_name")
-        editor.remove("user_last_name")
-        editor.remove("user_username")
-        editor.remove("user_avatar_url")
-        editor.remove("user_role")
-        editor.remove("user_status")
+        editor.clear()
         editor.apply()
     }
 
     suspend fun signUp(input: SignUpInput): AuthResult {
         return try {
-            if (BuildConfig.DEBUG) Log.d(TAG, "signUp: attempting for ${input.email}")
-            val result = SupaAuth.signUp(
+            if (BuildConfig.DEBUG) Log.d(TAG, "signUp: registering via Nexxauth (email=${input.email}, phone=${input.phone})")
+            val error = NexxAuth.signUp(
                 email = input.email,
+                phone = input.phone,
                 password = input.password,
-                fullName = input.fullName,
-                phone = input.phone
+                firstName = input.firstName,
+                lastName = input.lastName
             )
-            when (result) {
-                is SupaSignUpResult.EmailVerificationRequired -> {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "signUp: email verification required")
-                    return AuthResult.VerificationRequired(result.email)
+            if (error != null) {
+                if (error.contains("already", ignoreCase = true)) {
+                    return AuthResult.EmailAlreadyExists(input.email)
                 }
-                is SupaSignUpResult.SessionEstablished -> {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "signUp: Supabase auth success")
-                }
+                return AuthResult.Error(error)
             }
-            val user = SupaAuth.client.auth.currentUserOrNull()
-            if (user != null) {
-                if (!isNetworkAvailable()) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "signUp: no network, skipping backend sync")
-                    return AuthResult.Error("No internet connection — signup completed locally, will sync when online")
+
+            if (!isNetworkAvailable()) {
+                return AuthResult.Error("No internet connection — please try again when online")
+            }
+            val sync = syncWithBackend()
+            when (sync) {
+                is SyncResult.Success -> AuthResult.Success(sync.user)
+                is SyncResult.Error -> {
+                    Log.e(TAG, "signUp: sync failed — ${sync.message}")
+                    AuthResult.Error("Account created! Could not sync with server: ${sync.message}")
                 }
-                val sync = syncWithBackend()
-                when (sync) {
-                    is SyncResult.Success -> {
-                        if (BuildConfig.DEBUG) Log.d(TAG, "signUp: sync success, role=${sync.user.role}")
-                        AuthResult.Success(sync.user)
-                    }
-                    is SyncResult.Error -> {
-                        Log.e(TAG, "signUp: sync failed — ${sync.message}")
-                        // Don't sign out — Supabase auth succeeded, backend sync can retry later
-                        AuthResult.Error("Account created! Could not sync with server: ${sync.message}")
-                    }
-                }
-            } else {
-                AuthResult.Error("Signup succeeded but no session returned")
             }
         } catch (e: Exception) {
             Log.e(TAG, "signUp: exception — ${e.message}", e)
-            val msg = e.message ?: ""
-            if (msg.contains("already exists", ignoreCase = true) ||
-                msg.contains("already registered", ignoreCase = true) ||
-                msg.contains("already in use", ignoreCase = true) ||
-                msg.contains("User already", ignoreCase = true)) {
-                return AuthResult.EmailAlreadyExists(input.email)
-            }
-            AuthResult.Error(msg)
+            AuthResult.Error(e.message ?: "Sign up failed")
         }
     }
 
     suspend fun signIn(input: SignInInput): AuthResult {
         return try {
-            if (BuildConfig.DEBUG) Log.d(TAG, "signIn: attempting for ${input.email}")
-            SupaAuth.signIn(email = input.email, password = input.password)
-            if (BuildConfig.DEBUG) Log.d(TAG, "signIn: Supabase auth success")
+            if (BuildConfig.DEBUG) Log.d(TAG, "signIn: logging in via Nexxauth (identifier=${input.identifier})")
+            val error = NexxAuth.signIn(identifier = input.identifier, password = input.password)
+            if (error != null) {
+                return AuthResult.Error(error)
+            }
+
             if (!isNetworkAvailable()) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "signIn: no network, skipping backend sync")
                 val cached = getCachedUser()
                 if (cached != null) return AuthResult.Success(cached)
-                // First login on this device — no cached user yet.
-                // Don't attempt the network call; show a direct error.
                 return AuthResult.Error("No internet connection — please try again when online")
             }
             val sync = syncWithBackend()
             when (sync) {
-                is SyncResult.Success -> {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "signIn: sync success, role=${sync.user.role}")
-                    AuthResult.Success(sync.user)
-                }
+                is SyncResult.Success -> AuthResult.Success(sync.user)
                 is SyncResult.Error -> {
                     Log.e(TAG, "signIn: sync failed — ${sync.message}")
-                    // Don't sign out — Supabase auth succeeded, backend sync can retry later
                     val cached = getCachedUser()
-                    if (cached != null) {
-                        AuthResult.Success(cached)
-                    } else {
-                        AuthResult.Error("Login successful! Could not sync profile: ${sync.message}")
-                    }
+                    if (cached != null) AuthResult.Success(cached)
+                    else AuthResult.Error("Login successful! Could not sync profile: ${sync.message}")
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "signIn: exception — ${e.message}", e)
-            val msg = e.message ?: ""
-            // If email not confirmed, offer OTP verification
-            if (msg.contains("Email not confirmed", ignoreCase = true) ||
-                msg.contains("email_not_confirmed", ignoreCase = true)) {
-                AuthResult.VerificationRequired(input.email)
-            } else {
-                AuthResult.Error(msg)
-            }
+            AuthResult.Error(e.message ?: "Sign in failed")
         }
     }
 
     suspend fun restoreSession(): AuthResult {
-        return if (isLoggedIn()) {
+        return if (NexxAuth.isLoggedIn()) {
             if (!isNetworkAvailable()) {
-                if (BuildConfig.DEBUG) Log.d(TAG, "restoreSession: no network, skipping sync, keeping cached user")
                 val cached = getCachedUser()
-                return if (cached != null) {
-                    AuthResult.Success(cached)
-                } else {
-                    AuthResult.Error("No internet — showing offline data")
-                }
+                return if (cached != null) AuthResult.Success(cached) else AuthResult.Error("No internet — showing offline data")
             }
-            if (BuildConfig.DEBUG) Log.d(TAG, "restoreSession: session found, syncing...")
             val sync = syncWithBackend()
             when (sync) {
-                is SyncResult.Success -> {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "restoreSession: sync success, role=${sync.user.role}")
-                    AuthResult.Success(sync.user)
-                }
+                is SyncResult.Success -> AuthResult.Success(sync.user)
                 is SyncResult.Error -> {
-                    Log.e(TAG, "restoreSession: sync failed — ${sync.message}")
-                    // Don't sign out! The session is still valid, just the backend
-                    // is unreachable. Keep the cached user for now.
                     val cached = getCachedUser()
-                    if (cached != null) {
-                        AuthResult.Success(cached)
-                    } else {
-                        AuthResult.Error("Could not sync — no internet connection")
-                    }
+                    if (cached != null) AuthResult.Success(cached)
+                    else AuthResult.Error("Could not sync — no internet connection")
                 }
             }
         } else {
-            if (BuildConfig.DEBUG) Log.d(TAG, "restoreSession: no saved session")
             AuthResult.Error("No saved session")
         }
     }
 
-    suspend fun sendPasswordResetCode(email: String): String? {
-        return try {
-            if (BuildConfig.DEBUG) Log.d(TAG, "sendPasswordResetCode: for $email")
-            SupaAuth.sendRecoveryOtp(email)
-            if (BuildConfig.DEBUG) Log.d(TAG, "sendPasswordResetCode: success")
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "sendPasswordResetCode: failed — ${e.message}")
-            e.message ?: "Failed to send reset code"
-        }
-    }
+    /**
+     * Self-service password reset is not supported by Nexxauth's public API yet.
+     * Resets are done the Nexxauth way: an admin sets a temporary password and
+     * the user is forced to change it on first login.
+     */
+    suspend fun sendPasswordResetCode(identifier: String): String? =
+        "Password reset is managed by your administrator — ask them to set a temporary password for you."
 
-    suspend fun completePasswordReset(email: String, code: String, newPassword: String): String? {
-        return try {
-            if (BuildConfig.DEBUG) Log.d(TAG, "completePasswordReset: verifying code for $email")
-            val verified = SupaAuth.verifyRecoveryOtp(email, code)
-            if (!verified) return "Invalid or expired reset code"
-            if (BuildConfig.DEBUG) Log.d(TAG, "completePasswordReset: code verified, updating password")
-            val updated = SupaAuth.updatePassword(newPassword)
-            if (!updated) return "Failed to update password"
-            SupaAuth.signOut()
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "completePasswordReset: failed — ${e.message}")
-            e.message ?: "Password reset failed"
-        }
-    }
+    suspend fun completePasswordReset(identifier: String, code: String, newPassword: String): String? =
+        "Password reset is managed by your administrator — ask them to set a temporary password for you."
 
     suspend fun updateProfile(
         fullName: String? = null,
@@ -269,14 +201,20 @@ object AuthRepository {
         avatarUrl: String? = null
     ): AuthResult {
         return try {
-            if (BuildConfig.DEBUG) Log.d(TAG, "updateProfile: updating in Supabase")
-            val success = SupaAuth.updateProfile(fullName, phone, username, avatarUrl)
-            if (!success) return AuthResult.Error("Failed to update profile in Supabase")
+            // Avatar is stored locally (Supabase is upload-only; the backend does
+            // not persist avatar URLs).
+            if (!avatarUrl.isNullOrBlank()) {
+                prefs?.edit()?.putString("user_avatar_url", avatarUrl)?.apply()
+                appContext?.let { ctx -> AvatarCache.cache(ctx, avatarUrl) }
+            }
 
-            // Cache new avatar locally when user changes their profile picture
-            appContext?.let { ctx -> AvatarCache.cache(ctx, avatarUrl) }
+            val firstName = fullName?.trim()?.split(" ", limit = 2)?.firstOrNull()
+            val lastName = fullName?.trim()?.split(" ", limit = 2)?.getOrNull(1)
+            if (!firstName.isNullOrBlank()) {
+                val error = NexxAuth.updateProfile(firstName, lastName)
+                if (error != null) return AuthResult.Error(error)
+            }
 
-            if (BuildConfig.DEBUG) Log.d(TAG, "updateProfile: syncing with backend")
             val sync = syncWithBackend()
             when (sync) {
                 is SyncResult.Success -> AuthResult.Success(sync.user)
@@ -288,45 +226,21 @@ object AuthRepository {
         }
     }
 
-    suspend fun verifyEmailOtpAndSync(email: String, code: String): AuthResult {
-        return try {
-            if (BuildConfig.DEBUG) Log.d(TAG, "verifyEmailOtpAndSync: verifying OTP for $email")
-            val verified = SupaAuth.verifyEmailOtp(email, code)
-            if (!verified) {
-                return AuthResult.Error("Invalid or expired verification code")
-            }
-            if (BuildConfig.DEBUG) Log.d(TAG, "verifyEmailOtpAndSync: OTP verified, syncing with backend")
-            val sync = syncWithBackend()
-            when (sync) {
-                is SyncResult.Success -> {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "verifyEmailOtpAndSync: sync success, role=${sync.user.role}")
-                    AuthResult.Success(sync.user)
-                }
-                is SyncResult.Error -> {
-                    Log.e(TAG, "verifyEmailOtpAndSync: sync failed — ${sync.message}")
-                    // Don't sign out — OTP verified successfully, backend can sync later
-                    val cached = getCachedUser()
-                    if (cached != null) {
-                        AuthResult.Success(cached)
-                    } else {
-                        AuthResult.Error("Verification succeeded! Could not sync profile: ${sync.message}")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "verifyEmailOtpAndSync: exception — ${e.message}", e)
-            AuthResult.Error(e.message ?: "Email verification failed")
-        }
-    }
+    /**
+     * Email OTP verification no longer applies — Nexxauth registers users with a
+     * session directly (no email confirmation step). Kept as a stub so callers
+     * compile; it should never be reached.
+     */
+    suspend fun verifyEmailOtpAndSync(email: String, code: String): AuthResult =
+        AuthResult.Error("Email verification is not required with Nexxauth")
 
     suspend fun signOut() {
         clearCachedUser()
         appContext?.let { AvatarCache.clear(it) }
-        SupaAuth.signOut()
+        NexxAuth.signOut()
     }
 
-    fun isLoggedIn(): Boolean =
-        SupaAuth.client.auth.currentSessionOrNull() != null
+    fun isLoggedIn(): Boolean = NexxAuth.isLoggedIn()
 
     private suspend fun syncWithBackend(): SyncResult {
         return try {
@@ -357,14 +271,7 @@ object AuthRepository {
                     com.gocavgo.ikuriye.type.UserStatus.PENDING -> UserStatusDto.PENDING
                     else -> UserStatusDto.PENDING
                 }
-                if (BuildConfig.DEBUG) Log.d(TAG, "syncWithBackend: user=${gqlUser.id}, role=$role, status=$status")
-                // Try to get avatarUrl from Supabase auth metadata first (it's stored there
-                // when the user updates their profile picture). Fall back to the cached
-                // user's avatar URL from a previous session.
-                val avatarFromMeta = (SupaAuth.client.auth.currentUserOrNull()
-                    ?.userMetadata?.get("avatar_url") as? kotlinx.serialization.json.JsonPrimitive)?.content
                 val avatarFromCache = getCachedUser()?.avatarUrl
-                val avatarUrl = avatarFromMeta ?: avatarFromCache
                 val user = AuthUserDto(
                     id = gqlUser.id,
                     email = gqlUser.email,
@@ -372,12 +279,11 @@ object AuthRepository {
                     firstName = gqlUser.firstName,
                     lastName = gqlUser.lastName,
                     username = gqlUser.username,
-                    avatarUrl = avatarUrl,
+                    avatarUrl = avatarFromCache,
                     role = role,
                     status = status
                 )
                 cacheUser(user)
-                // Cache avatar image locally so it doesn't re-download every time
                 appContext?.let { ctx -> AvatarCache.cache(ctx, user.avatarUrl) }
                 SyncResult.Success(user)
             } else {

@@ -32,6 +32,8 @@
         GRAPHQL_URL: ${{ secrets.GRAPHQL_URL }}
         MEDIA_BUCKET: ${{ secrets.MEDIA_BUCKET }}
         PROFILE_BUCKET: ${{ secrets.PROFILE_BUCKET }}
+        NEXXAUTH_BASE_URL: ${{ secrets.NEXXAUTH_BASE_URL }}
+        NEXXAUTH_CLIENT_ID: ${{ secrets.NEXXAUTH_CLIENT_ID }}
 
         KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -84,6 +86,8 @@
               SUPABASE_URL
               SUPABASE_KEY
               GRAPHQL_URL
+              NEXXAUTH_BASE_URL
+              NEXXAUTH_CLIENT_ID
               KEYSTORE_BASE64
               KEYSTORE_PASSWORD
               KEY_ALIAS

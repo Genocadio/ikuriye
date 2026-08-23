@@ -31,7 +31,8 @@ data class SignUpInput(
 }
 
 data class SignInInput(
-    val email: String,
+    /** Email or phone — Nexxauth login accepts either identifier. */
+    val identifier: String,
     val password: String
 )
 

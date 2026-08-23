@@ -30,8 +30,8 @@ import com.gocavgo.ikuriye.data.dto.AuthUserDto
 import com.gocavgo.ikuriye.data.dto.SignInInput
 import com.gocavgo.ikuriye.data.dto.SignUpInput
 import com.gocavgo.ikuriye.SearchUsersQuery
+import com.gocavgo.ikuriye.nexx.NexxAuth
 import com.gocavgo.ikuriye.network.ApolloClientProvider
-import com.gocavgo.ikuriye.supa.SupaAuth
 import com.gocavgo.ikuriye.supa.SupaClient
 import com.gocavgo.ikuriye.supa.SupaMedia
 import kotlinx.coroutines.Dispatchers
@@ -100,10 +100,9 @@ class TripViewModel : ViewModel() {
         applyDefaultPage(SettingsRepository.getDefaultPage())
 
         // Use cached user immediately — no loading spinner.
-        // We DO NOT call AuthRepository.isLoggedIn() here because that checks
-        // the Supabase client session, which hasn't been restored yet
-        // (we intentionally removed the runBlocking from SupaAuth.init() to
-        // avoid ANR). Instead, we check the SharedPreferences-based cached user.
+        // We DO NOT call AuthRepository.isLoggedIn() here because the Nexxauth
+        // session is restored asynchronously. Instead, we check the
+        // SharedPreferences-based cached user.
         val cached = AuthRepository.getCachedUser()
         if (cached != null) {
             // Show UI immediately with cached user data.
@@ -165,12 +164,10 @@ class TripViewModel : ViewModel() {
             // then sync with backend. Network calls (fetchClientPackages,
             // preloadDriverPackages) are deferred until the token is confirmed.
             viewModelScope.launch {
-                // Step 1: check if the SDK auto-loaded the session from storage.
-                // (autoSaveToStorage + autoLoadFromStorage + SharedPreferencesSessionManager
-                // handle persistence automatically during init().)
-                if (SupaAuth.getAccessToken() == null) {
-                    Log.w("TripViewModel", "restoreSession: no token after auto-load, trying refresh")
-                    val refreshed = SupaAuth.refreshSession()
+                // Step 1: check the persisted Nexxauth session; refresh if expired.
+                if (NexxAuth.getAccessToken() == null) {
+                    Log.w("TripViewModel", "restoreSession: no token persisted, trying refresh")
+                    val refreshed = NexxAuth.refreshSession()
                     if (!refreshed) {
                         Log.e("TripViewModel", "restoreSession: refresh also failed — session is invalid, logging out silently")
                         logout()
@@ -181,10 +178,8 @@ class TripViewModel : ViewModel() {
                     Log.d("TripViewModel", "restoreSession: session loaded from storage, token available")
                 }
 
-                // Step 2: start proactive session observation
-                // This auto-saves on SDK-initiated token refreshes and
-                // periodically checks token health as a safety net.
-                SupaAuth.observeSession(this@TripViewModel.viewModelScope)
+                // Step 2: start proactive session observation (refresh near expiry).
+                NexxAuth.observeSession(this@TripViewModel.viewModelScope)
 
                 // Step 2b: start notice feed (Realtime subscription + initial fetch)
                 NoticeRepository.start(this@TripViewModel.viewModelScope)
@@ -324,17 +319,9 @@ class TripViewModel : ViewModel() {
     }
 
     fun resendOtp() {
-        val email = _state.value.otpEmail
-        if (email.isBlank()) return
+        // Email OTP verification no longer exists with Nexxauth — kept as a no-op.
         viewModelScope.launch {
-            try {
-                SupaAuth.resendEmailOtp(email)
-                _toastEvent.emit("Verification code resent to $email")
-            } catch (e: Exception) {
-                Log.e("TripViewModel", "resendOtp failed: ${e.message}", e)
-                Log.e("TripViewModel", "resendOtp failed: ${e.message}", e)
-                _toastEvent.emit(e.message ?: "Failed to resend code")
-            }
+            _toastEvent.emit("Verification is not required with Nexxauth")
         }
     }
 
@@ -581,16 +568,16 @@ class TripViewModel : ViewModel() {
         }
     }
 
-    fun updatePassword(newPassword: String) {
+    fun updatePassword(currentPassword: String, newPassword: String) {
         viewModelScope.launch {
             _state.update { it.copy(isUpdatingProfile = true) }
-            val success = com.gocavgo.ikuriye.supa.SupaAuth.updatePassword(newPassword)
+            val error = NexxAuth.changePassword(currentPassword, newPassword)
             _state.update { it.copy(isUpdatingProfile = false) }
-            if (success) {
+            if (error == null) {
                 _toastEvent.emit("Password updated successfully")
             } else {
-                Log.e("TripViewModel", "updatePassword failed")
-                _toastEvent.emit("Failed to update password")
+                Log.e("TripViewModel", "updatePassword failed: $error")
+                _toastEvent.emit(error)
             }
         }
     }
@@ -602,7 +589,7 @@ class TripViewModel : ViewModel() {
             _state.update { it.copy(isUploadingProfileImage = true, profileUpdateError = "") }
 
             val uploadedUrl = com.gocavgo.ikuriye.supa.SupaMedia.uploadMedia(
-                client = com.gocavgo.ikuriye.supa.SupaAuth.client,
+                client = SupaClient.instance,
                 bucket = BuildConfig.PROFILE_BUCKET,
                 byteArray = byteArray,
                 mimeType = mimeType

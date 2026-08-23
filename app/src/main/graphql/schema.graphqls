@@ -114,7 +114,7 @@ input AssignPackageTripInput {
 }
 
 """
-Input: assign a new system role to a user.
+Input: assign a system role to an existing user.
 """
 input AssignRoleInput {
   """
@@ -126,12 +126,37 @@ input AssignRoleInput {
   Target role
   """
   role: Role!
+
+  """
+  Required when role is WORKER — the office the worker belongs to.
+  """
+  officeId: ID
 }
 
 """
 Built-in Boolean
 """
 scalar Boolean
+
+"""
+Input: create a role definition in Nexxauth. Name should be the lower-cased local role name so the backend's role checks recognize it.
+"""
+input CreateRoleInput {
+  """
+  Role name (super_admin, admin, customer, worker, driver)
+  """
+  name: String!
+
+  """
+  Permissions granted by this role
+  """
+  permissions: [String!]!
+
+  """
+  Auto-assign this role to new registrations (default false)
+  """
+  isDefault: Boolean
+}
 
 input CreatePackageInput {
   """
@@ -525,9 +550,24 @@ type Mutation {
   syncUser: User!
 
   """
-  Assign a new system role to a user. Super Admin only.
+  Assign a system role to an existing user. Super Admin only.
   """
   assignRole(input: AssignRoleInput!): User!
+
+  """
+  Create a role definition in Nexxauth. Super Admin only.
+  """
+  createRole(input: CreateRoleInput!): OrgRole!
+
+  """
+  Update a role definition in Nexxauth (rename, replace permissions, toggle default). Super Admin only.
+  """
+  updateRole(input: UpdateRoleInput!): OrgRole!
+
+  """
+  Delete a role definition in Nexxauth. Super Admin only.
+  """
+  deleteRole(roleId: ID!): Boolean!
 
   """
   Disable a user account. Admin or Super Admin only.
@@ -708,6 +748,31 @@ type NoticeViewer {
   ISO-8601 timestamp when the user read the notice, null if unread
   """
   readAt: String
+}
+
+"""
+A role definition as managed in Nexxauth. Role names flow into user tokens and are mapped back to local system roles by the backend; permissions are resolved server-side by Nexxauth and never shipped in tokens.
+"""
+type OrgRole {
+  """
+  Nexxauth role id
+  """
+  id: ID!
+
+  """
+  Role name — use the lower-cased local role name (super_admin, admin, customer, worker, driver) so the backend's role checks recognize it
+  """
+  name: String!
+
+  """
+  Permissions granted by this role
+  """
+  permissions: [String!]!
+
+  """
+  Whether new registrations are auto-assigned this role (at most one per organisation)
+  """
+  isDefault: Boolean!
 }
 
 """
@@ -1087,6 +1152,11 @@ type Query {
   Get the profile of the currently authenticated user. Requires authentication.
   """
   myProfile: User
+
+  """
+  List the organisation's role definitions as managed in Nexxauth. Admin or Super Admin only.
+  """
+  roles: [OrgRole!]!
 
   """
   Get a package by internal UUID.
@@ -1482,6 +1552,31 @@ input RegenerateDeliveryCodeInput {
   Package UUID
   """
   packageId: ID!
+}
+
+"""
+Input: update a role definition in Nexxauth. Null fields keep their current value; pass an empty permissions list to clear all permissions.
+"""
+input UpdateRoleInput {
+  """
+  Nexxauth role id
+  """
+  roleId: ID!
+
+  """
+  New role name (omit to keep)
+  """
+  name: String
+
+  """
+  Replace permissions (omit to keep)
+  """
+  permissions: [String!]
+
+  """
+  Toggle auto-assign to new registrations (omit to keep)
+  """
+  isDefault: Boolean
 }
 
 """

@@ -253,7 +253,7 @@ fun ClientLoginScreen(
             Column(Modifier.padding(16.dp)) {
                 OutlinedTextField(
                     value = email, onValueChange = { email = it },
-                    modifier = Modifier.fillMaxWidth(), label = { Text("Email") },
+                    modifier = Modifier.fillMaxWidth(), label = { Text("Email or Phone") },
                     leadingIcon = { Icon(Icons.Filled.Person, null) }, singleLine = true,
                     enabled = !isAuthLoading, shape = RoundedCornerShape(12.dp)
                 )
@@ -416,7 +416,7 @@ private fun AuthPanel(
                         OutlinedTextField(value = fullName, onValueChange = onFullNameChange, modifier = Modifier.fillMaxWidth(), label = { Text("Full Name") }, leadingIcon = { Icon(Icons.Filled.Person, null) }, singleLine = true, enabled = !isAuthLoading, shape = RoundedCornerShape(12.dp))
                         Spacer(Modifier.height(10.dp))
                     }
-                    OutlinedTextField(value = email, onValueChange = onEmailChange, modifier = Modifier.fillMaxWidth(), label = { Text("Email") }, leadingIcon = { Icon(Icons.Filled.Email, null) }, singleLine = true, enabled = !isAuthLoading, shape = RoundedCornerShape(12.dp))
+                    OutlinedTextField(value = email, onValueChange = onEmailChange, modifier = Modifier.fillMaxWidth(), label = { Text(if (signUp) "Email" else "Email or Phone") }, leadingIcon = { Icon(Icons.Filled.Email, null) }, singleLine = true, enabled = !isAuthLoading, shape = RoundedCornerShape(12.dp))
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(value = password, onValueChange = onPasswordChange, modifier = Modifier.fillMaxWidth(), label = { Text("Password") }, leadingIcon = { Icon(Icons.Filled.Lock, null) }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !isAuthLoading, shape = RoundedCornerShape(12.dp))
                     if (signUp) {

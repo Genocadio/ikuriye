@@ -9,7 +9,7 @@ import com.apollographql.apollo.api.http.HttpRequest
 import com.apollographql.apollo.api.http.HttpResponse
 import com.gocavgo.ikuriye.BuildConfig
 import com.gocavgo.ikuriye.data.AuthRepository
-import com.gocavgo.ikuriye.supa.SupaAuth
+import com.gocavgo.ikuriye.nexx.NexxAuth
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -38,7 +38,7 @@ object ApolloClientProvider {
             .httpEngine(DefaultHttpEngine(okHttpClient))
             .addHttpInterceptor(object : HttpInterceptor {
                 override suspend fun intercept(request: HttpRequest, chain: HttpInterceptorChain): HttpResponse {
-                    val token = SupaAuth.getAccessToken()
+                    val token = NexxAuth.getAccessToken()
                     if (BuildConfig.DEBUG) {
                         val masked = if (token != null && token.length > 16) {
                             "${token.take(8)}...${token.takeLast(8)}"
@@ -73,7 +73,7 @@ object ApolloClientProvider {
                         // either use the fresh token or get the same failure result.
                         refreshMutex.withLock {
                             // Step 1: check if another request already refreshed while we waited
-                            val liveToken = SupaAuth.getAccessToken()
+                            val liveToken = NexxAuth.getAccessToken()
                             if (liveToken != null) {
                                 Log.d(TAG, "Token already fresh — another request refreshed while we waited, retrying")
                                 return chain.proceed(
@@ -96,9 +96,9 @@ object ApolloClientProvider {
                                 val ctx = if (isGraphQLAuthError) "GraphQL-level auth" else "HTTP 401"
                                 Log.d(TAG, "$ctx — attempting silent token refresh (mutex acquired)")
                             }
-                            val refreshed = SupaAuth.refreshSession()
+                            val refreshed = NexxAuth.refreshSession()
                             if (refreshed) {
-                                val newToken = SupaAuth.getAccessToken()
+                                val newToken = NexxAuth.getAccessToken()
                                 if (newToken != null) {
                                     Log.d(TAG, "Token refreshed silently, retrying request")
                                     return chain.proceed(
