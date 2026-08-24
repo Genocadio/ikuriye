@@ -36,8 +36,7 @@ query MyPackages($page: Int, $size: Int, $order: SortOrder) {
         media {
           id
           url
-          mediaType
-          createdAt
+          mimeType
         }
       }
       events {

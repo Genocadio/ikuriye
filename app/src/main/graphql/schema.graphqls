@@ -511,18 +511,13 @@ enum LocationType {
 }
 
 """
-Input: a media link associated with a package.
+Input: a media file uploaded via /api/files/upload.
 """
 input MediaInput {
   """
-  URL of the media
+  Media ID returned by POST /api/files/upload
   """
-  url: String!
-
-  """
-  Type of media
-  """
-  mediaType: MediaType!
+  mediaId: ID!
 }
 
 """
@@ -663,6 +658,16 @@ type Mutation {
   Mark a notice as read for the authenticated user. Pass the viewer id returned by myNotices.
   """
   markNoticeRead(viewerId: ID!): NoticeViewer!
+
+  """
+  Update the authenticated user's profile picture. Pass the mediaId from POST /api/files/upload.
+  """
+  updateAvatar(mediaId: ID!): User!
+
+  """
+  Delete a package and all its media (files + DB rows).
+  """
+  deletePackage(packageId: ID!): Boolean!
 }
 
 """
@@ -974,24 +979,19 @@ A media link associated with a package (video or picture).
 """
 type PackageMedia {
   """
-  Internal UUID
+  Media ID (from upload)
   """
   id: ID!
 
   """
-  URL of the media
+  Fetchable URL (signed or direct)
   """
   url: String!
 
   """
-  Type of media
+  MIME type (e.g. image/jpeg, video/mp4)
   """
-  mediaType: MediaType!
-
-  """
-  ISO-8601 timestamp of creation
-  """
-  createdAt: String!
+  mimeType: String!
 }
 
 """
@@ -1312,6 +1312,13 @@ type Subscription {
   Only authenticated users with DRIVER or WORKER roles receive events.
   """
   newPackageTransfer: PackageCreation!
+
+  """
+  Real-time notice feed. Emits a Notice whenever one is created for the
+  authenticated user. Each subscriber only receives notices addressed to
+  them (filtered by the notice_viewers.user_id row).
+  """
+  noticeCreated: Notice!
 }
 
 """
@@ -1632,6 +1639,11 @@ type User {
   User name
   """
   username: String
+
+  """
+  Profile picture signed URL (7-day expiry, auto-refreshed by backend)
+  """
+  avatarUrl: String
 
   """
   System role — determines permissions

@@ -179,7 +179,7 @@ object PackageRepository {
             Log.d("PackageMedia", "Has data: ${data != null}")
             if (data != null) {
                 val pkg = data.createPackage.deliveryPackage
-                Log.d("PackageMedia", "Response media: ${pkg.details?.media?.map { "${it?.url} (${it?.mediaType})" }}")
+                Log.d("PackageMedia", "Response media: ${pkg.details?.media?.map { "${it?.url} (${it?.mimeType})" }}")
             }
             if (errors != null && errors.isNotEmpty()) {
                 val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }

@@ -25,7 +25,7 @@ import org.json.JSONObject
  * The org-access JWT returned is then sent to the backend GraphQL API, and the
  * opaque refresh token is rotated on every refresh (single-use).
  *
- * Supabase is NOT used for auth anymore — only for file uploads (see SupaClient).
+ * Supabase is NOT used for auth or uploads anymore — file uploads go through the backend.
  */
 object NexxAuth {
 

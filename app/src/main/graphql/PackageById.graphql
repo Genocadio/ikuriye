@@ -35,8 +35,7 @@ query PackageById($id: ID!) {
       media {
         id
         url
-        mediaType
-        createdAt
+        mimeType
       }
     }
     events {

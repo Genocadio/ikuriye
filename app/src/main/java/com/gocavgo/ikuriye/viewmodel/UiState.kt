@@ -69,12 +69,12 @@ data class MediaUploadState(
     val id: String = java.util.UUID.randomUUID().toString(),
     val uri: String? = null,
     val byteArray: ByteArray? = null,
-    val fileName: String? = null,
     val progress: Double = 0.0,
+    val mediaId: String? = null,
     val url: String? = null,
+    val mimeType: String = "image/jpeg",
     val isUploading: Boolean = false,
     val error: String? = null,
-    val mimeType: String = "image/jpeg",
     val job: kotlinx.coroutines.Job? = null
 )
 

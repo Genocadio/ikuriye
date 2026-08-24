@@ -3,6 +3,7 @@ package com.gocavgo.ikuriye.data
 import android.util.Log
 import com.gocavgo.ikuriye.BuildConfig
 import com.gocavgo.ikuriye.MarkNoticeReadMutation
+import com.gocavgo.ikuriye.NoticeCreatedSubscription
 import com.gocavgo.ikuriye.MyNoticesQuery
 import com.gocavgo.ikuriye.UnreadCountQuery
 import com.gocavgo.ikuriye.network.ApolloClientProvider
@@ -39,9 +40,10 @@ data class Notice(
  *
  * Architecture:
  * 1. Initial fetch via GraphQL (MyNoticesQuery, UnreadCountQuery)
- * 2. Background polling at 30s intervals (Supabase Realtime is no longer used —
- *    Supabase is file-upload only)
- * 3. Mark-as-read goes through the backend `markNoticeRead` GraphQL mutation
+ * 2. Real-time push via GraphQL subscription (NoticeCreatedSubscription) —
+ *    replaces Supabase Realtime; no Supabase dependency for notifications.
+ * 3. Background polling at 30s intervals as a safety-net fallback.
+ * 4. Mark-as-read goes through the backend `markNoticeRead` GraphQL mutation
  *    (writes `read_at` on the `notice_viewers` row server-side), with an
  *    optimistic local update first.
  *
@@ -60,6 +62,7 @@ object NoticeRepository {
     val unreadCount: StateFlow<Int> = _unreadCount.asStateFlow()
 
     private var pollJob: Job? = null
+    private var subscriptionJob: Job? = null
     private var started = false
 
     // Server-confirmed "read" viewer-row ids from the last fetch, used to detect
@@ -67,7 +70,7 @@ object NoticeRepository {
     private val previouslyReadViewerIds = mutableSetOf<String>()
 
     /**
-     * Start the notice feed: initial fetch + background polling.
+     * Start the notice feed: initial fetch + GraphQL subscription + fallback polling.
      * Safe to call multiple times — subsequent calls are no-ops.
      */
     fun start(scope: CoroutineScope) {
@@ -80,7 +83,12 @@ object NoticeRepository {
             fetchUnreadCount()
         }
 
-        // Background polling — delivers new notices within the poll interval.
+        // GraphQL subscription — real-time push for new notices.
+        subscriptionJob = scope.launch {
+            startSubscription()
+        }
+
+        // Background polling — safety-net fallback for missed subscription events.
         pollJob = scope.launch {
             while (isActive) {
                 delay(POLL_INTERVAL_MS)
@@ -89,20 +97,65 @@ object NoticeRepository {
             }
         }
 
-        if (BuildConfig.DEBUG) Log.d(TAG, "started with ${POLL_INTERVAL_MS}ms polling")
+        if (BuildConfig.DEBUG) Log.d(TAG, "started with GraphQL subscription + ${POLL_INTERVAL_MS}ms polling fallback")
     }
 
     /**
-     * Stop polling and reset state.
+     * Stop subscription, polling, and reset state.
      * Safe to call even if not started.
      */
     fun stop() {
         started = false
+        subscriptionJob?.cancel()
+        subscriptionJob = null
         pollJob?.cancel()
         pollJob = null
     }
 
-    // ── GraphQL operations ─────────────────────────────────────────────────────
+    // ── GraphQL subscription ───────────────────────────────────────────────────
+
+    private suspend fun startSubscription() {
+        try {
+            ApolloClientProvider.client
+                .subscription(NoticeCreatedSubscription())
+                .toFlow()
+                .collect { response ->
+                if (!started) return@collect
+                if (response.errors != null && response.errors!!.isNotEmpty()) {
+                    Log.e(TAG, "subscription: ${response.errors!!.joinToString { it.message ?: "" }}")
+                    return@collect
+                }
+                val gql = response.data?.noticeCreated ?: return@collect
+                val notice = Notice(
+                    id = gql.id,
+                    resourceType = gql.resourceType,
+                    resourceId = gql.resourceId,
+                    eventType = gql.eventType,
+                    actorId = gql.actorId,
+                    title = gql.title,
+                    message = gql.message,
+                    payload = gql.payload,
+                    viewerId = gql.viewer.id,
+                    viewerNoticeId = gql.viewer.noticeId,
+                    viewerReadAt = gql.viewer.readAt,
+                    createdAt = gql.createdAt
+                )
+                // Deduplicate — the 30s poll may have already fetched this notice.
+                val existing = _notices.value.find { it.viewerId == notice.viewerId }
+                if (existing == null) {
+                    _notices.update { list ->
+                        (list + notice).sortedBy { it.viewerReadAt != null }
+                    }
+                    _unreadCount.value = _unreadCount.value + 1
+                    if (BuildConfig.DEBUG) Log.d(TAG, "subscription: new notice ${notice.id} (${notice.eventType})")
+                }
+            }
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.w(TAG, "subscription ended: ${e.message}")
+        }
+    }
+
+    // ── GraphQL queries ─────────────────────────────────────────────────────────
 
     private suspend fun fetchNotices() {
         try {

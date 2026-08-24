@@ -1,0 +1,15 @@
+mutation UpdateAvatar($mediaId: ID!) {
+    updateAvatar(mediaId: $mediaId) {
+        id
+        email
+        phone
+        firstName
+        lastName
+        username
+        avatarUrl
+        role
+        status
+        createdAt
+        updatedAt
+    }
+}

@@ -1,0 +1,3 @@
+mutation DeletePackage($packageId: ID!) {
+    deletePackage(packageId: $packageId)
+}

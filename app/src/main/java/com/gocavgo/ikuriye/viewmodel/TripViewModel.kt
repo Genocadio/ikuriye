@@ -32,8 +32,6 @@ import com.gocavgo.ikuriye.data.dto.SignUpInput
 import com.gocavgo.ikuriye.SearchUsersQuery
 import com.gocavgo.ikuriye.nexx.NexxAuth
 import com.gocavgo.ikuriye.network.ApolloClientProvider
-import com.gocavgo.ikuriye.supa.SupaClient
-import com.gocavgo.ikuriye.supa.SupaMedia
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -588,36 +586,69 @@ class TripViewModel : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(isUploadingProfileImage = true, profileUpdateError = "") }
 
-            val uploadedUrl = com.gocavgo.ikuriye.supa.SupaMedia.uploadMedia(
-                client = SupaClient.instance,
-                bucket = BuildConfig.PROFILE_BUCKET,
+            val uploadResult = com.gocavgo.ikuriye.network.BackendStorage.uploadFile(
                 byteArray = byteArray,
-                mimeType = mimeType
+                mimeType = mimeType,
+                purpose = "avatar"
             )
 
-            if (uploadedUrl != null) {
-                // Cache the uploaded profile picture locally so it doesn't
-                // need to re-download when viewing the profile.
-                val ctx = AuthRepository.getAppContext()
-                if (ctx != null) {
-                    try {
-                        com.gocavgo.ikuriye.cache.MediaCache.getInstance(ctx).cacheBytes(uploadedUrl, byteArray)
-                    } catch (e: Exception) {
-                        Log.e("TripViewModel", "Failed to cache profile image: ${e.message}")
-                    }
+            if (uploadResult != null) {
+                // Link the uploaded media to this user's avatar via GraphQL mutation
+                val response = ApolloClientProvider.client
+                    .mutation(com.gocavgo.ikuriye.UpdateAvatarMutation(
+                        mediaId = uploadResult.mediaId
+                    ))
+                    .execute()
+
+                if (response.errors != null && response.errors!!.isNotEmpty()) {
+                    Log.e("TripViewModel", "updateAvatar: ${response.errors!!.joinToString { it.message ?: "" }}")
+                    _state.update { it.copy(isUploadingProfileImage = false, selectedProfileImage = null) }
+                    _toastEvent.emit("Failed to save profile picture")
+                    return@launch
                 }
-                val result = AuthRepository.updateProfile(avatarUrl = uploadedUrl)
-                when (result) {
-                    is AuthResult.Success -> {
-                        applyUser(result.user)
-                        _state.update { it.copy(isUploadingProfileImage = false, selectedProfileImage = null) }
-                        _toastEvent.emit("Profile picture updated")
+
+                val gqlUser = response.data?.updateAvatar
+                if (gqlUser != null) {
+                    val avatarUrl = gqlUser.avatarUrl
+                    // Update cached user with the new avatar URL
+                    if (avatarUrl != null) {
+                        val ctx = AuthRepository.getAppContext()
+                        if (ctx != null) {
+                            try {
+                                com.gocavgo.ikuriye.cache.MediaCache.getInstance(ctx).cacheBytes(avatarUrl, byteArray)
+                            } catch (e: Exception) {
+                                Log.e("TripViewModel", "Failed to cache profile image: ${e.message}")
+                            }
+                        }
                     }
-                    is AuthResult.Error -> {
-                        _state.update { it.copy(isUploadingProfileImage = false, selectedProfileImage = null) }
-                        _toastEvent.emit("Failed to save picture: ${result.message}")
-                    }
-                    else -> _state.update { it.copy(isUploadingProfileImage = false, selectedProfileImage = null) }
+                    applyUser(AuthUserDto(
+                        id = gqlUser.id,
+                        email = gqlUser.email,
+                        phone = gqlUser.phone,
+                        firstName = gqlUser.firstName,
+                        lastName = gqlUser.lastName,
+                        username = gqlUser.username,
+                        avatarUrl = avatarUrl,
+                        role = when (gqlUser.role) {
+                            com.gocavgo.ikuriye.type.Role.DRIVER -> com.gocavgo.ikuriye.data.dto.RoleDto.DRIVER
+                            com.gocavgo.ikuriye.type.Role.CUSTOMER -> com.gocavgo.ikuriye.data.dto.RoleDto.CUSTOMER
+                            com.gocavgo.ikuriye.type.Role.WORKER -> com.gocavgo.ikuriye.data.dto.RoleDto.WORKER
+                            com.gocavgo.ikuriye.type.Role.ADMIN -> com.gocavgo.ikuriye.data.dto.RoleDto.ADMIN
+                            com.gocavgo.ikuriye.type.Role.SUPER_ADMIN -> com.gocavgo.ikuriye.data.dto.RoleDto.SUPER_ADMIN
+                            else -> com.gocavgo.ikuriye.data.dto.RoleDto.CUSTOMER
+                        },
+                        status = when (gqlUser.status) {
+                            com.gocavgo.ikuriye.type.UserStatus.ACTIVE -> com.gocavgo.ikuriye.data.dto.UserStatusDto.ACTIVE
+                            com.gocavgo.ikuriye.type.UserStatus.DISABLED -> com.gocavgo.ikuriye.data.dto.UserStatusDto.DISABLED
+                            com.gocavgo.ikuriye.type.UserStatus.PENDING -> com.gocavgo.ikuriye.data.dto.UserStatusDto.PENDING
+                            else -> com.gocavgo.ikuriye.data.dto.UserStatusDto.PENDING
+                        }
+                    ))
+                    _state.update { it.copy(isUploadingProfileImage = false, selectedProfileImage = null) }
+                    _toastEvent.emit("Profile picture updated")
+                } else {
+                    _state.update { it.copy(isUploadingProfileImage = false, selectedProfileImage = null) }
+                    _toastEvent.emit("Failed to save profile picture")
                 }
             } else {
                 _state.update { it.copy(isUploadingProfileImage = false, selectedProfileImage = null) }
@@ -1123,15 +1154,14 @@ class TripViewModel : ViewModel() {
             val weightValue = weightStr.toDoubleOrNull()
                 ?: Regex("[\\d.]+").find(weightStr)?.value?.toDoubleOrNull()
 
-            val mediaInputs = if (pkg.mediaUrls.isNotEmpty()) {
-                pkg.mediaUrls.map { url ->
+            val mediaInputs = s.mediaUploads
+                .filter { it.mediaId != null }
+                .map { upload ->
                     com.gocavgo.ikuriye.type.MediaInput(
-                        url = url,
-                        mediaType = if (url.endsWith(".mp4", true)) com.gocavgo.ikuriye.type.MediaType.VIDEO else com.gocavgo.ikuriye.type.MediaType.PICTURE
+                        mediaId = upload.mediaId!!
                     )
                 }
-            } else emptyList()
-            Log.d("PackageMedia", "MediaInput objects being sent: ${mediaInputs.map { "${it.url} (${it.mediaType})" }}")
+            Log.d("PackageMedia", "MediaInput objects being sent: ${mediaInputs.map { it.mediaId }}")
 
             val details = DetailInput(
                 category = if (pkg.category.isNotBlank()) Optional.present(pkg.category) else Optional.absent(),
@@ -2033,37 +2063,26 @@ class TripViewModel : ViewModel() {
         _state.update { it.copy(mediaUploads = it.mediaUploads + newState) }
         
         val job = viewModelScope.launch {
-            val url = SupaMedia.uploadMedia(
-                client = SupaClient.instance,
-                bucket = BuildConfig.MEDIA_BUCKET,
+            val uploadResult = com.gocavgo.ikuriye.network.BackendStorage.uploadFile(
                 byteArray = byteArray,
                 mimeType = mimeType,
+                purpose = "package-media",
                 onProgress = { progress ->
                     updateMediaProgress(newState.id, progress)
                 }
             )
             
-            Log.d("PackageMedia", "Upload completed for ${newState.id}: url=$url")
-            // Cache the uploaded bytes locally by their URL so we don't need
-            // to re-download them when viewing the package.
-            if (url != null) {
-                val ctx = AuthRepository.getAppContext()
-                if (ctx != null) {
-                    try {
-                        com.gocavgo.ikuriye.cache.MediaCache.getInstance(ctx).cacheBytes(url, byteArray)
-                    } catch (e: Exception) {
-                        Log.e("TripViewModel", "Failed to cache uploaded media: ${e.message}")
-                    }
-                }
-            }
+            val mediaId = uploadResult?.mediaId
+            Log.d("PackageMedia", "Upload completed: mediaId=$mediaId")
             _state.update { s ->
                 s.copy(
                     mediaUploads = s.mediaUploads.map { m ->
                         if (m.id == newState.id) m.copy(
-                            url = url,
+                            mediaId = mediaId,
+                            url = uploadResult?.url,
                             isUploading = false,
-                            progress = if (url != null) 100.0 else m.progress,
-                            error = if (url == null) "Upload failed" else null
+                            progress = if (mediaId != null) 100.0 else m.progress,
+                            error = if (mediaId == null) "Upload failed" else null
                         ) else m
                     }
                 )

@@ -5,6 +5,9 @@ import com.apollographql.apollo.ApolloClient
 import com.apollographql.apollo.network.http.DefaultHttpEngine
 import com.apollographql.apollo.network.http.HttpInterceptor
 import com.apollographql.apollo.network.http.HttpInterceptorChain
+import com.apollographql.apollo.network.ws.GraphQLWsProtocol
+import com.apollographql.apollo.network.ws.WebSocketNetworkTransport
+import com.apollographql.apollo.network.ws.WsProtocol
 import com.apollographql.apollo.api.http.HttpRequest
 import com.apollographql.apollo.api.http.HttpResponse
 import com.gocavgo.ikuriye.BuildConfig
@@ -36,6 +39,20 @@ object ApolloClientProvider {
         ApolloClient.Builder()
             .serverUrl(BuildConfig.GRAPHQL_URL)
             .httpEngine(DefaultHttpEngine(okHttpClient))
+            .subscriptionNetworkTransport(
+                WebSocketNetworkTransport.Builder()
+                    .serverUrl(BuildConfig.GRAPHQL_URL)
+                    .protocol(
+                        GraphQLWsProtocol.Factory(
+                            connectionPayload = {
+                                val token = NexxAuth.getAccessToken()
+                                if (token != null) mapOf("Authorization" to "Bearer $token")
+                                else emptyMap()
+                            }
+                        )
+                    )
+                    .build()
+            )
             .addHttpInterceptor(object : HttpInterceptor {
                 override suspend fun intercept(request: HttpRequest, chain: HttpInterceptorChain): HttpResponse {
                     val token = NexxAuth.getAccessToken()

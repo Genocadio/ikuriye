@@ -1,0 +1,20 @@
+subscription NoticeCreated {
+    noticeCreated {
+        id
+        resourceType
+        resourceId
+        eventType
+        actorId
+        title
+        message
+        payload
+        viewer {
+            id
+            noticeId
+            userId
+            deliveredAt
+            readAt
+        }
+        createdAt
+    }
+}

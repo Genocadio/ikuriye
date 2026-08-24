@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
  * org-access JWT is sent to the backend GraphQL API, which verifies it offline
  * and mirrors the profile via `syncUser`.
  *
- * Supabase is no longer used for auth — only for file uploads.
+ * Supabase is no longer used for auth or uploads — file uploads go through the backend.
  */
 object AuthRepository {
 

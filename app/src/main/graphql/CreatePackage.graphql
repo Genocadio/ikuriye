@@ -36,8 +36,7 @@ mutation CreatePackage($input: CreatePackageInput!) {
         media {
           id
           url
-          mediaType
-          createdAt
+          mimeType
         }
       }
       events {
