@@ -5,7 +5,6 @@ import com.gocavgo.ikuriye.data.PackageStatus
 import com.gocavgo.ikuriye.type.CustodianRole
 import com.gocavgo.ikuriye.type.DeliveryType
 import com.gocavgo.ikuriye.type.LocationType
-import com.gocavgo.ikuriye.type.MediaType
 import com.gocavgo.ikuriye.type.PersonRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -70,7 +69,7 @@ class PackageMappingTest {
                 description = "Laptop",
                 fragile = true,
                 weight = 2.5,
-                media = listOf(PackageByIdQuery.Medium("m1", "https://x/y.jpg", MediaType.PICTURE, "t1"))
+                media = listOf(PackageByIdQuery.Medium("m1", "https://x/y.jpg", "image/jpeg"))
             ),
             events = listOf(
                 PackageByIdQuery.Event("e1", "CREATED", "user-1", "Package created", "2026-01-01T00:00:00Z"),
