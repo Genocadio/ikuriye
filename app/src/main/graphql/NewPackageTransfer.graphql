@@ -1,0 +1,78 @@
+subscription NewPackageTransfer {
+    newPackageTransfer {
+        deliveryPackage {
+            id
+            trackingCode
+            deliveryType
+            status
+            creatorId
+            custodians {
+                id
+                userId
+                name
+                phone
+                role
+                assignedAt
+            }
+            people {
+                id
+                role
+                userId
+                name
+                phone
+            }
+            locations {
+                id
+                type
+                latitude
+                longitude
+                placeName
+                placeId
+            }
+            details {
+                category
+                description
+                fragile
+                weight
+                media {
+                    id
+                    url
+                    mimeType
+                }
+            }
+            events {
+                id
+                eventType
+                actorId
+                description
+                createdAt
+            }
+            transfers {
+                id
+                ruleType
+                status
+            }
+            createdAt
+            updatedAt
+        }
+        transfer {
+            id
+            creatorId
+            ruleType
+            acceptorType
+            matchCompanyId
+            matchUserId
+            requestorId
+            status
+            packages {
+                id
+                transferId
+                packageId
+                addedBy
+                addedAt
+            }
+            createdAt
+            updatedAt
+        }
+    }
+}

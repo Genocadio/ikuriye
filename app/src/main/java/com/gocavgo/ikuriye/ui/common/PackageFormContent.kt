@@ -891,31 +891,31 @@ private fun SummaryStep(
                 Spacer(Modifier.height(12.dp))
 
                 // Sender
-                SummaryRow(Icons.Filled.Person, if (showSenderFields) "Sender:" else "From:",
-                    if (showSenderFields) formState.senderName.ifBlank { "-" } else formState.fromAddress.ifBlank { "-" },
+                SummaryRow(Icons.Filled.Person, if (showSenderFields) "Sender" else "From",
+                    if (showSenderFields) formState.senderName.ifBlank { "Not specified" } else formState.fromAddress.ifBlank { "Not specified" },
                     colors)
                 if (showSenderFields && formState.senderName.isNotBlank()) {
-                    SummaryRow(Icons.Filled.Phone, "Sender phone:", formState.senderPhone.ifBlank { "-" }, colors)
-                    SummaryRow(Icons.Filled.MyLocation, "Pickup:", formState.fromAddress.ifBlank { "-" }, colors)
+                    SummaryRow(Icons.Filled.Phone, "Sender phone", formState.senderPhone.ifBlank { "Not provided" }, colors)
+                    SummaryRow(Icons.Filled.MyLocation, "Pickup location", formState.fromAddress.ifBlank { "Not specified" }, colors)
                 }
 
                 // Recipient
-                SummaryRow(Icons.Filled.Person, "Recipient:", formState.recipientName.ifBlank { "-" }, colors)
+                SummaryRow(Icons.Filled.Person, "Recipient", formState.recipientName.ifBlank { "Not specified" }, colors)
                 if (formState.recipientName.isNotBlank()) {
-                    SummaryRow(Icons.Filled.Phone, "Phone:", formState.recipientPhone.ifBlank { "-" }, colors)
+                    SummaryRow(Icons.Filled.Phone, "Recipient phone", formState.recipientPhone.ifBlank { "Not provided" }, colors)
                 }
 
                 // Delivery
-                SummaryRow(Icons.Filled.LocationOn, "Deliver to:", formState.toAddress.ifBlank { "-" }, colors)
+                SummaryRow(Icons.Filled.LocationOn, "Deliver to", formState.toAddress.ifBlank { "Not specified" }, colors)
 
                 HorizontalDivider(Modifier.padding(vertical = 8.dp), color = colors.divider, thickness = 0.5.dp)
 
                 // Package details
-                SummaryRow(Icons.Filled.Category, "Category:", formState.category.ifBlank { "-" }, colors)
-                SummaryRow(Icons.Filled.Description, "Description:", formState.description.ifBlank { "-" }, colors)
-                SummaryRow(Icons.Filled.MonitorWeight, "Weight:", "${formState.weight.ifBlank { "-" }} kg", colors)
+                SummaryRow(Icons.Filled.Category, "Category", formState.category.ifBlank { "Not specified" }, colors)
+                SummaryRow(Icons.Filled.Description, "Description", formState.description.ifBlank { "Not specified" }, colors)
+                SummaryRow(Icons.Filled.MonitorWeight, "Weight", if (formState.weight.isNotBlank()) "${formState.weight} kg" else "Not specified", colors)
                 if (formState.isFragile) {
-                    SummaryRow(Icons.Filled.Warning, "Fragile:", "Yes — handle with care", colors, accent = colors.red)
+                    SummaryRow(Icons.Filled.Warning, "Fragile", "Yes \u2014 handle with care", colors, accent = colors.red)
                 }
             }
         }
@@ -1065,15 +1065,34 @@ private fun SummaryRow(
     accent: Color? = null
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top
     ) {
-        Icon(icon, null, tint = (accent ?: colors.textSecondary).copy(alpha = 0.6f), modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, color = colors.textSecondary.copy(alpha = 0.7f), fontSize = 11.sp,
-            modifier = Modifier.width(80.dp))
-        Text(value, color = accent ?: colors.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Icon(
+            icon, null,
+            tint = (accent ?: colors.textSecondary).copy(alpha = 0.6f),
+            modifier = Modifier.size(16.dp).padding(top = 2.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                label,
+                color = colors.textSecondary.copy(alpha = 0.7f),
+                fontSize = 10.sp,
+                letterSpacing = 0.3.sp
+            )
+            Spacer(Modifier.height(1.dp))
+            Text(
+                value,
+                color = accent ?: colors.textPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

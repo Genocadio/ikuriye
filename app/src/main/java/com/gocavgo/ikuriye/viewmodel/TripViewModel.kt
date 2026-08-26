@@ -1308,10 +1308,17 @@ class TripViewModel : ViewModel() {
      */
     fun startPackageSubscription() {
         stopPackageSubscription() // avoid duplicate subscriptions
+
+        // Seed seen-ids from current offers so we don't re-emit existing ones
+        val initialIds = _state.value.driverAvailableOffers.map { it.id }.toSet()
+        com.gocavgo.ikuriye.data.PackageTransferSubscription.seedSeenIds(initialIds)
+
+        // Start the real-time GraphQL subscription (+ polling fallback)
+        com.gocavgo.ikuriye.data.PackageTransferSubscription.start(viewModelScope)
+
+        // Collect events from the subscription
         subscriptionJob = viewModelScope.launch {
-            // Collect known IDs from current offers to avoid duplicates on first poll
-            val initialIds = _state.value.driverAvailableOffers.map { it.id }.toSet()
-            PackageRepository.pollNewPackages(initialIds).collect { pkg ->
+            com.gocavgo.ikuriye.data.PackageTransferSubscription.events.collect { pkg ->
                 // Guard: skip if this package has already been accepted and moved
                 // to current packages (prevents race with acceptAUTOTransfer/etc).
                 val alreadyAccepted = _state.value.driverCurrentPackages.any { it.id == pkg.id }
@@ -1353,6 +1360,7 @@ class TripViewModel : ViewModel() {
     fun stopPackageSubscription() {
         subscriptionJob?.cancel()
         subscriptionJob = null
+        com.gocavgo.ikuriye.data.PackageTransferSubscription.stop()
     }
 
     /**

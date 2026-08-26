@@ -190,7 +190,7 @@ fun RoleSelectionScreen(
                                     fullName = fullName, onFullNameChange = { fullName = it },
                                     phone = phone, onPhoneChange = { phone = it },
                                     isAuthLoading = isAuthLoading, authResult = authResult,
-                                    onSignUp = { if (email.isNotBlank() && password.isNotBlank() && fullName.isNotBlank()) onSignUp(email.trim(), password, fullName.trim(), phone.trim().ifBlank { null }) },
+                                    onSignUp = { if (email.isNotBlank() && password.isNotBlank() && fullName.isNotBlank() && phone.isNotBlank()) onSignUp(email.trim(), password, fullName.trim(), phone.trim()) },
                                     onSignIn = { if (email.isNotBlank() && password.isNotBlank()) onSignIn(email.trim(), password) },
                                     onClearAuthResult = onClearAuthResult,
                                     onShowForgotPassword = onShowForgotPassword,
@@ -421,7 +421,7 @@ private fun AuthPanel(
                     OutlinedTextField(value = password, onValueChange = onPasswordChange, modifier = Modifier.fillMaxWidth(), label = { Text("Password") }, leadingIcon = { Icon(Icons.Filled.Lock, null) }, visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !isAuthLoading, shape = RoundedCornerShape(12.dp))
                     if (signUp) {
                         Spacer(Modifier.height(10.dp))
-                        PhoneInput(value = phone, onValueChange = onPhoneChange, modifier = Modifier.fillMaxWidth(), label = "Phone (optional)", enabled = !isAuthLoading)
+                        PhoneInput(value = phone, onValueChange = onPhoneChange, modifier = Modifier.fillMaxWidth(), label = "Phone", enabled = !isAuthLoading)
                     }
                 }
             }
@@ -431,7 +431,7 @@ private fun AuthPanel(
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colors.blue),
-                enabled = !isAuthLoading && email.isNotBlank() && password.isNotBlank() && (!isSignUp || fullName.isNotBlank())
+                enabled = !isAuthLoading && email.isNotBlank() && password.isNotBlank() && (!isSignUp || (fullName.isNotBlank() && phone.isNotBlank()))
             ) {
                 if (isAuthLoading) CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                 else Text(if (isSignUp) "Create Account" else "Sign In", fontWeight = FontWeight.Bold)
