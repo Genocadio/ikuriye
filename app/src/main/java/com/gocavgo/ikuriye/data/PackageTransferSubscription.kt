@@ -59,15 +59,47 @@ object PackageTransferSubscription {
             delay(POLL_FALLBACK_MS) // initial delay — subscription should deliver first
             while (isActive) {
                 try {
+                    // 1. Fetch available packages (now includes transfer-targeted packages)
                     val result = PackageRepository.fetchAvailablePackages(
                         page = 0, size = 20,
                         order = com.gocavgo.ikuriye.type.SortOrder.DESC
                     )
+                    var newCount = 0
                     for (pkg in result.items) {
                         if (pkg.id !in seenIds) {
                             seenIds.add(pkg.id)
                             _events.emit(pkg)
+                            newCount++
                         }
+                    }
+
+                    // 2. Recovery: also check myTransfers for packages that
+                    //    may have been missed due to WebSocket drops.
+                    try {
+                        val transfers = PackageRepository.fetchMyTransfers()
+                        val missedPackageIds = transfers
+                            .filter { it.status == "PENDING" || it.status == "REQUESTED" }
+                            .flatMap { it.packageIds }
+                            .filter { it !in seenIds }
+
+                        for (packageId in missedPackageIds) {
+                            try {
+                                val pkg = PackageRepository.fetchPackageById(packageId)
+                                if (pkg != null && pkg.id !in seenIds) {
+                                    seenIds.add(pkg.id)
+                                    _events.emit(pkg)
+                                    newCount++
+                                }
+                            } catch (_: Exception) {
+                                // Individual package fetch failed — skip
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "poll transfer recovery: ${e.message}")
+                    }
+
+                    if (newCount > 0) {
+                        Log.d(TAG, "poll fallback: emitted $newCount new packages")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "poll fallback: ${e.message}")
