@@ -1,31 +1,11 @@
 """
-Return type for acceptPackage mutation. Contains the updated package and the generated pickup code.
+Return type for acceptTransfer mutation. Contains the updated package.
 """
 type AcceptOffer {
   """
   The updated delivery package
   """
   deliveryPackage: DeliveryPackage!
-
-  """
-  Six-digit numeric pickup code — required when completing the package. One-time use. Null if a code already existed (e.g. driver-created package).
-  """
-  pickupCode: String
-}
-
-"""
-Return type for initiateDelivery / regenerateDeliveryCode mutations. Contains the updated package and the one-time delivery code.
-"""
-type DeliveryCodeResult {
-  """
-  The updated delivery package
-  """
-  deliveryPackage: DeliveryPackage!
-
-  """
-  Six-digit numeric delivery code — required by confirmDelivery to confirm the delivery. One-time display only.
-  """
-  deliveryCode: String!
 }
 
 """
@@ -114,11 +94,11 @@ input AssignPackageTripInput {
 }
 
 """
-Input: assign a system role to an existing user.
+Input: assign a system role to an existing user. The role is pushed to Nexxauth so the user's next tokens carry it. Users are registered directly against Nexxauth by the apps (Android/web) — the backend never provisions them.
 """
 input AssignRoleInput {
   """
-  User UUID
+  Nexxauth user id
   """
   userId: ID!
 
@@ -139,23 +119,68 @@ Built-in Boolean
 scalar Boolean
 
 """
-Input: create a role definition in Nexxauth. Name should be the lower-cased local role name so the backend's role checks recognize it.
+Input: confirm delivery of a package that is PENDING_CONFIRMATION. Requires the delivery code. Sets the package to DELIVERED.
 """
-input CreateRoleInput {
+input ConfirmDeliveryInput {
   """
-  Role name (super_admin, admin, customer, worker, driver)
+  Package UUID
+  """
+  packageId: ID!
+
+  """
+  Six-digit delivery code received via the notice feed
+  """
+  deliveryCode: String!
+}
+
+"""
+Input: create a standalone location row (not tied to a package). Usable as an office's location.
+"""
+input CreateLocationInput {
+  """
+  Whether this is ORIGIN or DESTINATION
+  """
+  type: LocationType!
+
+  """
+  Latitude
+  """
+  latitude: Float!
+
+  """
+  Longitude
+  """
+  longitude: Float!
+
+  """
+  Human-readable place name
+  """
+  placeName: String
+
+  """
+  External place ID (e.g. Google Maps place ID)
+  """
+  placeId: String
+}
+
+"""
+Input: create a new office.
+"""
+input CreateOfficeInput {
+  """
+  Office name
   """
   name: String!
 
   """
-  Permissions granted by this role
+  Contact details (phone, email, etc.)
   """
-  permissions: [String!]!
+  contact: String
 
   """
-  Auto-assign this role to new registrations (default false)
+  ID of the standalone location row for this office. Must reference an existing package_locations row.
   """
-  isDefault: Boolean
+  locationId: ID
 }
 
 input CreatePackageInput {
@@ -203,6 +228,26 @@ input CreatePackageInput {
   Optional: match user filter for auto-created transfer
   """
   transferMatchUserId: ID
+}
+
+"""
+Input: create a role definition in Nexxauth. Name should be the lower-cased local role name so the backend's role checks recognize it.
+"""
+input CreateRoleInput {
+  """
+  Role name (super_admin, admin, customer, worker, driver)
+  """
+  name: String!
+
+  """
+  Permissions granted by this role
+  """
+  permissions: [String!]!
+
+  """
+  Auto-assign this role to new registrations (default false)
+  """
+  isDefault: Boolean
 }
 
 """
@@ -258,6 +303,21 @@ enum CustodianRole {
   The receiver who the package is delivered to
   """
   RECEIVER
+}
+
+"""
+Return type for initiateDelivery / regenerateDeliveryCode mutations. Contains the updated package and the one-time delivery code.
+"""
+type DeliveryCodeResult {
+  """
+  The updated delivery package
+  """
+  deliveryPackage: DeliveryPackage!
+
+  """
+  Six-digit numeric delivery code — required by confirmDelivery to confirm the delivery. One-time display only.
+  """
+  deliveryCode: String!
 }
 
 """
@@ -375,12 +435,12 @@ Delivery type for a package.
 """
 enum DeliveryType {
   """
-  Open delivery — flexible status transitions (CREATED → ACCEPTED → PICKED_UP → IN_TRANSIT → DELIVERED → COMPLETED)
+  Open delivery — flexible status transitions (CREATED → ACCEPTED → PICKED_UP → IN_TRANSIT → PENDING_CONFIRMATION → DELIVERED → COMPLETED)
   """
   OPEN
 
   """
-  Fixed-route delivery — follows office-to-office flow (CREATED → ORIGIN_OFFICE → ASSIGNED_DRIVER → IN_TRANSIT → DESTINATION_OFFICE → READY_FOR_COLLECTION → COMPLETED)
+  Fixed-route delivery — follows office-to-office flow (CREATED → ORIGIN_OFFICE → ASSIGNED_DRIVER → IN_TRANSIT → DESTINATION_OFFICE → READY_FOR_COLLECTION → PENDING_CONFIRMATION → DELIVERED → COMPLETED)
   """
   FIXED_ROUTE
 }
@@ -441,19 +501,19 @@ Built-in Float
 scalar Float
 
 """
-Input: generate a pickup code for a package.
+Built-in ID
 """
-input GeneratePickupCodeInput {
+scalar ID
+
+"""
+Input: initiate delivery for a package. Transitions to PENDING_CONFIRMATION and generates a one-time delivery code.
+"""
+input InitiateDeliveryInput {
   """
   Package UUID
   """
   packageId: ID!
 }
-
-"""
-Built-in ID
-"""
-scalar ID
 
 """
 Built-in Int
@@ -511,11 +571,11 @@ enum LocationType {
 }
 
 """
-Input: a media file uploaded via /api/files/upload.
+Input: reference uploaded media when creating a package.
 """
 input MediaInput {
   """
-  Media ID returned by POST /api/files/upload
+  Media IDs returned by POST /api/files/upload
   """
   mediaId: ID!
 }
@@ -540,12 +600,12 @@ Write operations.
 """
 type Mutation {
   """
-  Sync the authenticated user's profile from Supabase Auth into the local database. Creates a new user if none exists, updates fields if they changed, and toggles DISABLED status if the Supabase user is banned.
+  Sync the authenticated user's profile from Nexxauth into the local database. Creates a new user if none exists, updates fields/roles/status if they changed. Nexxauth is the source of truth for identity.
   """
   syncUser: User!
 
   """
-  Assign a system role to an existing user. Super Admin only.
+  Assign a system role to an existing user, pushing the role to Nexxauth so future tokens carry it. Super Admin only. Assigning the WORKER role requires an officeId, which ties the user to that office via a worker profile.
   """
   assignRole(input: AssignRoleInput!): User!
 
@@ -565,7 +625,22 @@ type Mutation {
   deleteRole(roleId: ID!): Boolean!
 
   """
-  Disable a user account. Admin or Super Admin only.
+  Create a new office. Admin or Super Admin only.
+  """
+  createOffice(input: CreateOfficeInput!): Office!
+
+  """
+  Update an office. Admin or Super Admin only.
+  """
+  updateOffice(input: UpdateOfficeInput!): Office!
+
+  """
+  Create a standalone location row that an office can reference via locationId. Admin or Super Admin only.
+  """
+  createLocation(input: CreateLocationInput!): PackageLocation!
+
+  """
+  Disable a user account in Nexxauth and locally. Admin or Super Admin only.
   """
   disableUser(userId: ID!): User!
 
@@ -585,9 +660,19 @@ type Mutation {
   assignDriver(input: AssignDriverInput!): DeliveryPackage!
 
   """
-  Advance a package to the next status. Validates state-machine transitions and pickup codes (for COMPLETED).
+  Advance a package to the next status. Validates state-machine transitions; the actor must be the current custodian or trusted office staff.
   """
   updatePackageStatus(input: UpdatePackageStatusInput!): DeliveryPackage!
+
+  """
+  Assign a company/office to a package.
+  """
+  assignPackageCompany(input: AssignPackageCompanyInput!): DeliveryPackage!
+
+  """
+  Assign a trip identifier to a package.
+  """
+  assignPackageTrip(input: AssignPackageTripInput!): DeliveryPackage!
 
   """
   Initiate delivery: transitions the package to PENDING_CONFIRMATION, generates a one-time delivery code, and publishes the status change + code to the sender and receiver only via their notice feed (custodians never receive the code). Current custodian (Worker/Driver) only.
@@ -603,21 +688,6 @@ type Mutation {
   Regenerate the delivery code while the package is PENDING_CONFIRMATION. Invalidates the previous code and re-publishes the new one to the notice feed. Current custodian only.
   """
   regenerateDeliveryCode(input: RegenerateDeliveryCodeInput!): DeliveryCodeResult!
-
-  """
-  Assign a company/office to a package.
-  """
-  assignPackageCompany(input: AssignPackageCompanyInput!): DeliveryPackage!
-
-  """
-  Assign a trip identifier to a package.
-  """
-  assignPackageTrip(input: AssignPackageTripInput!): DeliveryPackage!
-
-  """
-  Generate a six-digit numeric pickup code for a package. Returns the updated package and the raw pickup code (one-time display). Fails if an unused code already exists.
-  """
-  generatePickupCode(input: GeneratePickupCodeInput!): AcceptOffer!
 
   """
   Create a new transfer with one or more packages. If ruleType is SECURE, a transfer code is generated and returned. Requires authentication.
@@ -660,12 +730,12 @@ type Mutation {
   markNoticeRead(viewerId: ID!): NoticeViewer!
 
   """
-  Update the authenticated user's profile picture. Pass the mediaId from POST /api/files/upload.
+  Update the authenticated user's profile picture. Pass the mediaId returned by POST /api/files/upload.
   """
   updateAvatar(mediaId: ID!): User!
 
   """
-  Delete a package and all its media (files + DB rows).
+  Delete a package and all its media (files + DB rows). Only the creator, admin, or current custodian can delete.
   """
   deletePackage(packageId: ID!): Boolean!
 }
@@ -753,6 +823,46 @@ type NoticeViewer {
   ISO-8601 timestamp when the user read the notice, null if unread
   """
   readAt: String
+}
+
+"""
+An office/branch — a physical location that workers belong to and packages pass through.
+"""
+type Office {
+  """
+  Internal UUID
+  """
+  id: ID!
+
+  """
+  Office name
+  """
+  name: String!
+
+  """
+  Contact details (phone, email, etc.)
+  """
+  contact: String
+
+  """
+  The standalone package_locations row describing this office's physical location
+  """
+  locationId: ID
+
+  """
+  The full location object, when locationId is set
+  """
+  location: PackageLocation
+
+  """
+  ISO-8601 timestamp of creation
+  """
+  createdAt: String!
+
+  """
+  ISO-8601 timestamp of last update
+  """
+  updatedAt: String!
 }
 
 """
@@ -1149,6 +1259,16 @@ type Query {
   user(id: ID!): User
 
   """
+  List all offices.
+  """
+  offices: [Office!]!
+
+  """
+  Get a single office by internal UUID.
+  """
+  office(id: ID!): Office
+
+  """
   Get the profile of the currently authenticated user. Requires authentication.
   """
   myProfile: User
@@ -1237,6 +1357,16 @@ type Query {
   Count of unread notices for the authenticated user. Requires authentication.
   """
   unreadNoticeCount: Int!
+}
+
+"""
+Input: regenerate the delivery code for a package. Only allowed while the package is PENDING_CONFIRMATION.
+"""
+input RegenerateDeliveryCodeInput {
+  """
+  Package UUID
+  """
+  packageId: ID!
 }
 
 """
@@ -1387,7 +1517,7 @@ type Transfer {
 }
 
 """
-Return type for acceptPackageByTransfer mutation. Contains the completed transfer and the list of accepted packages.
+Return type for acceptTransfer mutation. Contains the completed transfer and the list of accepted packages.
 """
 type TransferAcceptResult {
   """
@@ -1497,6 +1627,31 @@ enum TransferStatus {
 }
 
 """
+Input: update an office. Null fields keep their current value.
+"""
+input UpdateOfficeInput {
+  """
+  Office UUID
+  """
+  officeId: ID!
+
+  """
+  New office name
+  """
+  name: String
+
+  """
+  New contact details
+  """
+  contact: String
+
+  """
+  New location row ID. Must reference an existing package_locations row.
+  """
+  locationId: ID
+}
+
+"""
 Input: advance a package to a new status.
 """
 input UpdatePackageStatusInput {
@@ -1516,49 +1671,9 @@ input UpdatePackageStatusInput {
   status: PackageStatus!
 
   """
-  Six-digit pickup code (required for COMPLETED transition)
-  """
-  pickupCode: String
-
-  """
   Optional notes about the status change
   """
   notes: String
-}
-
-"""
-Input: initiate delivery for a package. Transitions to PENDING_CONFIRMATION and generates a one-time delivery code.
-"""
-input InitiateDeliveryInput {
-  """
-  Package UUID
-  """
-  packageId: ID!
-}
-
-"""
-Input: confirm delivery of a package that is PENDING_CONFIRMATION. Requires the delivery code. Sets the package to DELIVERED.
-"""
-input ConfirmDeliveryInput {
-  """
-  Package UUID
-  """
-  packageId: ID!
-
-  """
-  Six-digit delivery code received via the notice feed
-  """
-  deliveryCode: String!
-}
-
-"""
-Input: regenerate the delivery code for a package. Only allowed while the package is PENDING_CONFIRMATION.
-"""
-input RegenerateDeliveryCodeInput {
-  """
-  Package UUID
-  """
-  packageId: ID!
 }
 
 """
@@ -1607,16 +1722,16 @@ input UpdateTransferInput {
 }
 
 """
-Registered user of the platform. Users are synced from Supabase Auth.
+Registered user of the platform. Identity is managed by Nexxauth; the local row is a profile mirror synced on login.
 """
 type User {
   """
-  Internal UUID
+  Nexxauth org-user id (the JWT sub claim)
   """
   id: ID!
 
   """
-  Email address (from Supabase)
+  Email address (from Nexxauth)
   """
   email: String!
 

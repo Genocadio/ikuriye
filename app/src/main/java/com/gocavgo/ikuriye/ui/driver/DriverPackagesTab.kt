@@ -38,7 +38,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,7 +59,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.PathEffect
 import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.PackageStatus
@@ -110,10 +117,44 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
     )
 
     var isSearchExpanded by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    // Sync pager → subTab
+    LaunchedEffect(pagerState.currentPage) {
+        if (subTab != pagerState.currentPage) {
+            viewModel.setDriverPackageSubTab(pagerState.currentPage)
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+    // Sync subTab → pager (for tab button clicks)
+    LaunchedEffect(subTab) {
+        if (pagerState.currentPage != subTab) {
+            pagerState.animateScrollToPage(subTab)
+        }
+    }
 
     // Exit selection mode if switching away from current tab
     LaunchedEffect(subTab) {
         if (subTab != 0 && isSelection) viewModel.exitSelectionMode()
+    }
+
+    // Block horizontal swipe while pull-to-refresh is active
+    var isVerticalScrolling by remember { mutableStateOf(false) }
+    val noHorizontalDuringRefresh = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    isVerticalScrolling = true
+                }
+                return Offset.Zero
+            }
+            override fun onPostScroll(available: Offset, consumed: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y == 0f && consumed.y == 0f) {
+                    isVerticalScrolling = false
+                }
+                return Offset.Zero
+            }
+        }
     }
 
     PullToRefreshBox(
@@ -208,18 +249,11 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                 Spacer(Modifier.height(8.dp))
 
                 // ── Tab content ─────────────────────────────────────────────────
-                // Each tab gets its own key() scope so PullToRefreshBox's nested scroll
-                // connection is cleanly reset when switching tabs — prevents "stuck" scroll.
-                AnimatedContent(
-                    targetState = subTab,
-                    transitionSpec = {
-                        (fadeIn(tween(250)) + slideInHorizontally(tween(250)) { it / 5 }) togetherWith
-                        (fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 5 })
-                    },
-                    label = "pkgSubTab"
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize().nestedScroll(noHorizontalDuringRefresh)
                 ) { tab ->
-                    key(tab) {
-                        val listState = remember { LazyListState() }
+                        val listState = rememberLazyListState()
                         
                         // Collapse search when scrolling down
                         LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
@@ -328,7 +362,6 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                         }
                     }
                 }
-                } // end key(tab)
             }
 
             // ── Floating Create Transfer button (selection mode) ─────────────────
@@ -537,12 +570,31 @@ fun DriverCurrentPackageCard(
             }
             if (!isDelivered && !isTransferRequested) {
                 Spacer(Modifier.height(8.dp))
+                val isPendingConfirmation = pkg.status == PackageStatus.PENDING_CONFIRMATION
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onDeliver, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = colors.green)) {
-                        Icon(Icons.Filled.Check, null, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("Deliver", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Button(
+                        onClick = onDeliver,
+                        modifier = Modifier.weight(1f).heightIn(min = 38.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isPendingConfirmation) colors.blue else colors.green)
+                    ) {
+                        Icon(
+                            if (isPendingConfirmation) Icons.Filled.Lock else Icons.Filled.Check,
+                            null,
+                            modifier = Modifier.size(16.dp)
+                        );
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (isPendingConfirmation) "Enter Confirmation Code" else "Deliver",
+                            fontSize = if (isPendingConfirmation) 11.sp else 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
                     }
-                    OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
-                        Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                    if (!isPendingConfirmation) {
+                        OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
+                            Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                        }
                     }
                 }
             } else if (isTransferRequested) {

@@ -6,15 +6,25 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+/**
+ * Local-first package cache with separate stores for driver and client data.
+ *
+ * Architecture:
+ * - **Driver current packages**: cached separately, smart-merged on refresh
+ * - **Client packages**: cached separately, smart-merged on refresh
+ * - **Completed packages**: cached without media URLs (lazy-load on demand)
+ * - **Driver offers**: NOT cached (always fresh from server)
+ *
+ * Smart merge: on refresh, only packages that changed (status, transfer, etc.)
+ * are updated; removed packages are dropped; new packages are added.
+ * This prevents the "flash-empty" problem and keeps the UI stable.
+ */
 object PackageCache {
 
     private const val TAG = "PackageCache"
-    private const val CACHE_FILE = "my_packages_page0.json"
-    private const val EXPIRY_MS = 60 * 60 * 1000L
-    // Touch-on-access throttle: rewrite cachedAt at most this often, so an
-    // actively-used cache keeps extending its expiry without rewriting the file
-    // on every read. Note: unlike MediaCache, all getCached() callers run on
-    // Dispatchers.IO (verified in TripViewModel), so writing here is safe.
+    private const val DRIVER_CACHE_FILE = "driver_packages.json"
+    private const val CLIENT_CACHE_FILE = "client_packages.json"
+    private const val EXPIRY_MS = 7 * 24 * 60 * 60 * 1000L // 7 days (was 1 hour)
     private const val TOUCH_THROTTLE_MS = 5 * 60 * 1000L
 
     private var cacheDir: File? = null
@@ -25,15 +35,45 @@ object PackageCache {
         evictExpired()
     }
 
-    fun getCached(): PagedResult? {
+    // ── Driver Packages ──────────────────────────────────────────────────────
+
+    fun getDriverCached(): PagedResult? = getCached(DRIVER_CACHE_FILE)
+
+    fun saveDriver(result: PagedResult) = save(DRIVER_CACHE_FILE, result)
+
+    fun mergeDriverUpdate(updated: ClientPackage) {
+        mergeUpdate(DRIVER_CACHE_FILE, updated)
+    }
+
+    fun removeDriverPackage(packageId: String) {
+        removePackage(DRIVER_CACHE_FILE, packageId)
+    }
+
+    // ── Client Packages ──────────────────────────────────────────────────────
+
+    fun getClientCached(): PagedResult? = getCached(CLIENT_CACHE_FILE)
+
+    fun saveClient(result: PagedResult) = save(CLIENT_CACHE_FILE, result)
+
+    fun mergeClientUpdate(updated: ClientPackage) {
+        mergeUpdate(CLIENT_CACHE_FILE, updated)
+    }
+
+    fun removeClientPackage(packageId: String) {
+        removePackage(CLIENT_CACHE_FILE, packageId)
+    }
+
+    // ── Generic Cache Operations ─────────────────────────────────────────────
+
+    private fun getCached(fileName: String): PagedResult? {
         val dir = cacheDir ?: return null
-        val file = File(dir, CACHE_FILE)
+        val file = File(dir, fileName)
         if (!file.exists()) return null
         return try {
             val json = JSONObject(file.readText())
             val cachedAt = json.optLong("cachedAt", 0L)
             if (System.currentTimeMillis() - cachedAt > EXPIRY_MS) {
-                Log.d(TAG, "Cache expired")
+                Log.d(TAG, "Cache expired: $fileName")
                 file.delete()
                 return null
             }
@@ -42,12 +82,8 @@ object PackageCache {
             for (i in 0 until itemsArr.length()) {
                 items.add(packageFromJson(itemsArr.getJSONObject(i)))
             }
-            // Touch-on-access: keep the cache "fresh" while it's being used, so a
-            // cache that gets read regularly doesn't expire while the user is
-            // browsing (same pattern as MediaCache, persisted here because callers
-            // are already on Dispatchers.IO).
             touch(file, json, cachedAt)
-            Log.d(TAG, "Cache hit: ${items.size} packages")
+            Log.d(TAG, "Cache hit: ${items.size} packages from $fileName")
             PagedResult(
                 items = items,
                 totalCount = json.optInt("totalCount", items.size),
@@ -55,13 +91,13 @@ object PackageCache {
                 currentPage = json.optInt("currentPage", 0)
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to read cache", e)
+            Log.e(TAG, "Failed to read cache: $fileName", e)
             file.delete()
             null
         }
     }
 
-    fun save(result: PagedResult) {
+    private fun save(fileName: String, result: PagedResult) {
         val dir = cacheDir ?: return
         try {
             val itemsArr = JSONArray()
@@ -75,33 +111,84 @@ object PackageCache {
                 put("currentPage", result.currentPage)
                 put("items", itemsArr)
             }
-            File(dir, CACHE_FILE).writeText(json.toString())
-            Log.d(TAG, "Cache saved: ${result.items.size} packages")
+            File(dir, fileName).writeText(json.toString())
+            Log.d(TAG, "Cache saved: ${result.items.size} packages to $fileName")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save cache", e)
-        }
-    }
-
-    fun clear() {
-        cacheDir?.let {
-            File(it, CACHE_FILE).delete()
+            Log.e(TAG, "Failed to save cache: $fileName", e)
         }
     }
 
     /**
-     * Extends the cache's expiry window by rewriting cachedAt to now, throttled
-     * to [TOUCH_THROTTLE_MS] to avoid rewriting on every read. Reuses the already-
-     * parsed [json] from [getCached] — no extra file read. Best-effort: a failed
-     * rewrite is logged and ignored, so a touch failure can never turn a valid
-     * cache hit into a miss (the outer catch in [getCached] would delete the file).
+     * Smart merge: update a single package in the cache.
+     * If the package exists, update it in-place. If not, add it.
+     * This preserves the existing list order and avoids full re-fetch.
      */
+    private fun mergeUpdate(fileName: String, updated: ClientPackage) {
+        val dir = cacheDir ?: return
+        val file = File(dir, fileName)
+        if (!file.exists()) return
+        try {
+            val json = JSONObject(file.readText())
+            val itemsArr = json.getJSONArray("items")
+            var found = false
+            for (i in 0 until itemsArr.length()) {
+                val item = itemsArr.getJSONObject(i)
+                if (item.optString("id") == updated.id) {
+                    itemsArr.put(i, packageToJson(updated))
+                    found = true
+                    break
+                }
+            }
+            if (!found) {
+                // Package not in cache yet — prepend it
+                itemsArr.put(0, packageToJson(updated))
+            }
+            json.put("items", itemsArr)
+            json.put("cachedAt", System.currentTimeMillis()) // extend expiry
+            file.writeText(json.toString())
+            Log.d(TAG, "Cache merged: ${updated.id} in $fileName (found=$found)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to merge cache: $fileName", e)
+        }
+    }
+
+    /**
+     * Remove a package from the cache by ID.
+     */
+    private fun removePackage(fileName: String, packageId: String) {
+        val dir = cacheDir ?: return
+        val file = File(dir, fileName)
+        if (!file.exists()) return
+        try {
+            val json = JSONObject(file.readText())
+            val itemsArr = json.getJSONArray("items")
+            val newArr = JSONArray()
+            for (i in 0 until itemsArr.length()) {
+                val item = itemsArr.getJSONObject(i)
+                if (item.optString("id") != packageId) {
+                    newArr.put(item)
+                }
+            }
+            json.put("items", newArr)
+            json.put("totalCount", newArr.length())
+            json.put("cachedAt", System.currentTimeMillis())
+            file.writeText(json.toString())
+            Log.d(TAG, "Cache removed: $packageId from $fileName")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to remove from cache: $fileName", e)
+        }
+    }
+
+    fun clear() {
+        cacheDir?.listFiles()?.forEach { it.delete() }
+    }
+
     private fun touch(file: File, json: JSONObject, cachedAt: Long) {
         val now = System.currentTimeMillis()
         if (now - cachedAt < TOUCH_THROTTLE_MS) return
         try {
             json.put("cachedAt", now)
             file.writeText(json.toString())
-            Log.d(TAG, "Cache touched (expiry extended)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to touch cache", e)
         }
@@ -109,20 +196,20 @@ object PackageCache {
 
     private fun evictExpired() {
         cacheDir?.listFiles()?.forEach { file ->
-            if (file.name == CACHE_FILE) {
-                try {
-                    val json = JSONObject(file.readText())
-                    val cachedAt = json.optLong("cachedAt", 0L)
-                    if (System.currentTimeMillis() - cachedAt > EXPIRY_MS) {
-                        file.delete()
-                        Log.d(TAG, "Evicted expired cache")
-                    }
-                } catch (_: Exception) {
+            try {
+                val json = JSONObject(file.readText())
+                val cachedAt = json.optLong("cachedAt", 0L)
+                if (System.currentTimeMillis() - cachedAt > EXPIRY_MS) {
                     file.delete()
+                    Log.d(TAG, "Evicted expired cache: ${file.name}")
                 }
+            } catch (_: Exception) {
+                file.delete()
             }
         }
     }
+
+    // ── JSON Serialization (media URLs excluded for completed packages) ──────
 
     private fun packageToJson(pkg: ClientPackage): JSONObject {
         val historyArr = JSONArray()
@@ -145,8 +232,11 @@ object PackageCache {
                 if (c.phone.isNotBlank()) put("phone", c.phone)
             })
         }
+        // Only cache media URLs for non-completed packages (save storage)
         val mediaArr = JSONArray()
-        pkg.mediaUrls.forEach { url -> mediaArr.put(url) }
+        if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED) {
+            pkg.mediaUrls.forEach { url -> mediaArr.put(url) }
+        }
         return JSONObject().apply {
             put("id", pkg.id)
             put("trackingCode", pkg.trackingCode)

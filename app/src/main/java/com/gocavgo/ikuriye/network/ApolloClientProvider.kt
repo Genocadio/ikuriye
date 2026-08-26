@@ -5,6 +5,7 @@ import com.apollographql.apollo.ApolloClient
 import com.apollographql.apollo.network.http.DefaultHttpEngine
 import com.apollographql.apollo.network.http.HttpInterceptor
 import com.apollographql.apollo.network.http.HttpInterceptorChain
+import com.apollographql.apollo.api.http.HttpHeader
 import com.apollographql.apollo.network.ws.GraphQLWsProtocol
 import com.apollographql.apollo.network.ws.WebSocketNetworkTransport
 import com.apollographql.apollo.network.ws.WsProtocol
@@ -42,6 +43,16 @@ object ApolloClientProvider {
             .subscriptionNetworkTransport(
                 WebSocketNetworkTransport.Builder()
                     .serverUrl(BuildConfig.GRAPHQL_URL)
+                    .headers(
+                        // Send auth in the HTTP upgrade request so Spring Security
+                        // can authenticate the WebSocket handshake and propagate the
+                        // security context to subscription resolver threads.
+                        listOfNotNull(
+                            NexxAuth.getAccessToken()?.let { token ->
+                                HttpHeader("Authorization", "Bearer $token")
+                            }
+                        )
+                    )
                     .protocol(
                         GraphQLWsProtocol.Factory(
                             connectionPayload = {

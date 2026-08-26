@@ -3,6 +3,7 @@ package com.gocavgo.ikuriye.data
 import android.content.Context
 import android.content.SharedPreferences
 import com.gocavgo.ikuriye.viewmodel.AppThemeMode
+import com.gocavgo.ikuriye.viewmodel.CreatePackageFormState
 
 object SettingsRepository {
 
@@ -14,6 +15,15 @@ object SettingsRepository {
     private const val KEY_RESUME_SCREEN   = "resume_screen_key"
     private const val KEY_RESUME_PKG_ID   = "resume_package_id"
     private const val KEY_AUTO_SHOWN_DELIVERY = "auto_shown_delivery_notices"
+    // Create package form draft persistence
+    private const val KEY_FORM_FROM_ADDRESS    = "draft_from_address"
+    private const val KEY_FORM_TO_ADDRESS      = "draft_to_address"
+    private const val KEY_FORM_RECIPIENT_NAME  = "draft_recipient_name"
+    private const val KEY_FORM_RECIPIENT_PHONE = "draft_recipient_phone"
+    private const val KEY_FORM_DESCRIPTION     = "draft_description"
+    private const val KEY_FORM_WEIGHT          = "draft_weight"
+    private const val KEY_FORM_CATEGORY        = "draft_category"
+    private const val KEY_FORM_IS_FRAGILE      = "draft_is_fragile"
 
     private var prefs: SharedPreferences? = null
 
@@ -98,6 +108,62 @@ object SettingsRepository {
         prefs?.edit()
             ?.remove(KEY_RESUME_SCREEN)
             ?.remove(KEY_RESUME_PKG_ID)
+            ?.apply()
+    }
+
+    // ── Create Package Form Draft ────────────────────────────────────────────
+
+    fun saveCreatePackageDraft(
+        fromAddress: String, toAddress: String, recipientName: String,
+        recipientPhone: String, description: String, weight: String,
+        category: String, isFragile: Boolean
+    ) {
+        val p = prefs ?: return
+        p.edit()
+            .putString(KEY_FORM_FROM_ADDRESS, fromAddress)
+            .putString(KEY_FORM_TO_ADDRESS, toAddress)
+            .putString(KEY_FORM_RECIPIENT_NAME, recipientName)
+            .putString(KEY_FORM_RECIPIENT_PHONE, recipientPhone)
+            .putString(KEY_FORM_DESCRIPTION, description)
+            .putString(KEY_FORM_WEIGHT, weight)
+            .putString(KEY_FORM_CATEGORY, category)
+            .putBoolean(KEY_FORM_IS_FRAGILE, isFragile)
+            .apply()
+    }
+
+    fun getCreatePackageDraft(): CreatePackageFormState {
+        val p = prefs ?: return CreatePackageFormState()
+        return CreatePackageFormState(
+            fromAddress = p.getString(KEY_FORM_FROM_ADDRESS, "") ?: "",
+            toAddress = p.getString(KEY_FORM_TO_ADDRESS, "") ?: "",
+            recipientName = p.getString(KEY_FORM_RECIPIENT_NAME, "") ?: "",
+            recipientPhone = p.getString(KEY_FORM_RECIPIENT_PHONE, "") ?: "",
+            description = p.getString(KEY_FORM_DESCRIPTION, "") ?: "",
+            weight = p.getString(KEY_FORM_WEIGHT, "") ?: "",
+            category = p.getString(KEY_FORM_CATEGORY, "") ?: "",
+            isFragile = p.getBoolean(KEY_FORM_IS_FRAGILE, false)
+        )
+    }
+
+    fun hasCreatePackageDraft(): Boolean {
+        val p = prefs ?: return false
+        return p.getString(KEY_FORM_FROM_ADDRESS, "")?.isNotBlank() == true
+            || p.getString(KEY_FORM_TO_ADDRESS, "")?.isNotBlank() == true
+            || p.getString(KEY_FORM_RECIPIENT_NAME, "")?.isNotBlank() == true
+            || p.getString(KEY_FORM_DESCRIPTION, "")?.isNotBlank() == true
+    }
+
+    fun clearCreatePackageDraft() {
+        val p = prefs ?: return
+        p.edit()
+            ?.remove(KEY_FORM_FROM_ADDRESS)
+            ?.remove(KEY_FORM_TO_ADDRESS)
+            ?.remove(KEY_FORM_RECIPIENT_NAME)
+            ?.remove(KEY_FORM_RECIPIENT_PHONE)
+            ?.remove(KEY_FORM_DESCRIPTION)
+            ?.remove(KEY_FORM_WEIGHT)
+            ?.remove(KEY_FORM_CATEGORY)
+            ?.remove(KEY_FORM_IS_FRAGILE)
             ?.apply()
     }
 

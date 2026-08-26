@@ -7,7 +7,6 @@ import com.gocavgo.ikuriye.ConfirmDeliveryMutation
 import com.gocavgo.ikuriye.ConfirmTransferMutation
 import com.gocavgo.ikuriye.CreatePackageMutation
 import com.gocavgo.ikuriye.CreateTransferMutation
-import com.gocavgo.ikuriye.GeneratePickupCodeMutation
 import com.gocavgo.ikuriye.InitiateDeliveryMutation
 import com.gocavgo.ikuriye.MyPackagesQuery
 import com.gocavgo.ikuriye.MyTransfersQuery
@@ -491,29 +490,10 @@ object PackageRepository {
     )
 
     suspend fun generatePickupCode(packageId: String): PickupCodeResult? {
-        return try {
-            val input = com.gocavgo.ikuriye.type.GeneratePickupCodeInput(packageId = packageId)
-            val response = ApolloClientProvider.client
-                .mutation(GeneratePickupCodeMutation(input))
-                .execute()
-            val errors = response.errors
-            val data = response.data
-            if (errors != null && errors.isNotEmpty()) {
-                Log.e(TAG, "generatePickupCode: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
-                null
-            } else if (data != null) {
-                val pkg = data.generatePickupCode.deliveryPackage
-                PickupCodeResult(
-                    packageId = pkg.id,
-                    pickupCode = data.generatePickupCode.pickupCode ?: ""
-                )
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "generatePickupCode: exception — ${e.message}", e)
-            null
-        }
+        // TODO: generatePickupCode mutation is not yet implemented on the server.
+        // Stubbed to return null so the app doesn't crash.
+        Log.w(TAG, "generatePickupCode: mutation not available on server")
+        return null
     }
 
     // ── Delivery Initiation / Confirmation ──────────────────────────────────

@@ -91,7 +91,8 @@ class TripViewModel : ViewModel() {
                 defaultPage      = SettingsRepository.getDefaultPage(),
                 keepScreenAwake  = SettingsRepository.getKeepScreenAwake(),
                 themeMode        = SettingsRepository.getThemeMode(),
-                isPipEnabled     = SettingsRepository.getPipEnabled()
+                isPipEnabled     = SettingsRepository.getPipEnabled(),
+                createPackageForm = SettingsRepository.getCreatePackageDraft()
             )
         }
         // Apply the persisted default page to the tab state
@@ -180,7 +181,7 @@ class TripViewModel : ViewModel() {
                 NexxAuth.observeSession(this@TripViewModel.viewModelScope)
 
                 // Step 2b: start notice feed (Realtime subscription + initial fetch)
-                NoticeRepository.start(this@TripViewModel.viewModelScope)
+                NoticeRepository.start(this@TripViewModel.viewModelScope, AuthRepository.getAppContext())
                 collectNotices()
 
                 // Step 3: fetch initial data now that we have a valid session
@@ -192,6 +193,10 @@ class TripViewModel : ViewModel() {
                     else -> {
                         fetchClientPackages()
                     }
+                }
+                // Schedule background sync worker
+                AuthRepository.getAppContext()?.let { ctx ->
+                    com.gocavgo.ikuriye.service.PackageSyncWorker.schedule(ctx)
                 }
 
                 // Step 4: sync with backend — if offline, keep cached user, just notify
@@ -416,8 +421,12 @@ class TripViewModel : ViewModel() {
                     }
                 }
                 // Start notice feed on fresh login
-                NoticeRepository.start(this@TripViewModel.viewModelScope)
+                NoticeRepository.start(this@TripViewModel.viewModelScope, AuthRepository.getAppContext())
                 collectNotices()
+                // Schedule background sync worker
+                AuthRepository.getAppContext()?.let { ctx ->
+                    com.gocavgo.ikuriye.service.PackageSyncWorker.schedule(ctx)
+                }
             }
             is AuthResult.Loading -> { /* no-op */ }
             is AuthResult.VerificationRequired -> {
@@ -449,6 +458,11 @@ class TripViewModel : ViewModel() {
             AuthRepository.signOut()
         }
         SettingsRepository.clear()
+        PackageCache.clear()
+        // Cancel background sync worker
+        AuthRepository.getAppContext()?.let { ctx ->
+            com.gocavgo.ikuriye.service.PackageSyncWorker.cancel(ctx)
+        }
         _state.update {
             it.copy(
                 isLoggedIn = false,
@@ -1201,6 +1215,7 @@ class TripViewModel : ViewModel() {
                         mediaUploads = emptyList()
                     )
                 }
+                SettingsRepository.clearCreatePackageDraft()
             } else {
                 _state.update { it.copy(isSubmittingPackage = false) }
                 _toastEvent.emit("Failed to create package. Please try again.")
@@ -1222,8 +1237,8 @@ class TripViewModel : ViewModel() {
     fun fetchClientPackages() {
         viewModelScope.launch {
             _state.update { it.copy(clientCurrentPage = 0) }
-            val cached = withContext(Dispatchers.IO) { PackageCache.getCached() }
-            val hasNoCache = cached == null
+            // Local-first: show cached data immediately, no loading spinner
+            val cached = withContext(Dispatchers.IO) { PackageCache.getClientCached() }
             if (cached != null) {
                 _state.update { it.copy(
                     clientPackages = cached.items,
@@ -1233,13 +1248,15 @@ class TripViewModel : ViewModel() {
                     clientTotalCount = cached.totalCount,
                     clientPackagesFetchedOnce = true
                 ) }
-            }
-            if (hasNoCache) {
+                // Don't show loading spinner — user sees cached data immediately
+            } else {
+                // No cache at all — show loading on first load only
                 _state.update { it.copy(isClientInitialLoading = true) }
             }
+            // Always fetch fresh data in background and merge
             try {
                 val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                PackageCache.save(result)
+                withContext(Dispatchers.IO) { PackageCache.saveClient(result) }
                 _state.update { it.copy(
                     clientPackages = result.items,
                     clientCurrentPage = 0,
@@ -1261,7 +1278,7 @@ class TripViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                withContext(Dispatchers.IO) { PackageCache.save(result) }
+                withContext(Dispatchers.IO) { PackageCache.saveClient(result) }
                 _state.update { it.copy(
                     clientPackages = result.items,
                     clientCurrentPage = 0,
@@ -1424,7 +1441,8 @@ class TripViewModel : ViewModel() {
 
     private fun preloadDriverPackages() {
         viewModelScope.launch {
-            val cached = withContext(Dispatchers.IO) { PackageCache.getCached() }
+            // Local-first: show cached data immediately
+            val cached = withContext(Dispatchers.IO) { PackageCache.getDriverCached() }
             if (cached != null) {
                 _state.update { it.copy(
                     driverCurrentPackages = cached.items,
@@ -1443,8 +1461,8 @@ class TripViewModel : ViewModel() {
                 driverCurrentPage = 0,
                 driverOffersPage = 0
             ) }
-            val cached = withContext(Dispatchers.IO) { PackageCache.getCached() }
-            val hasNoCache = cached == null
+            // Local-first: show cached driver packages immediately
+            val cached = withContext(Dispatchers.IO) { PackageCache.getDriverCached() }
             if (cached != null) {
                 _state.update { it.copy(
                     driverCurrentPackages = cached.items,
@@ -1453,20 +1471,25 @@ class TripViewModel : ViewModel() {
                     driverCurrentTotalPages = cached.totalPages,
                     driverCurrentTotalCount = cached.totalCount
                 ) }
-            }
-            if (hasNoCache) {
+                // Don't show loading spinner — user sees cached data immediately
+            } else {
+                // No cache — show loading on first load only
                 _state.update { it.copy(isDriverInitialLoading = true) }
             }
             try {
+                // Fetch driver's packages (cached locally)
                 val current = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                withContext(Dispatchers.IO) { PackageCache.save(current) }
-                val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
+                withContext(Dispatchers.IO) { PackageCache.saveDriver(current) }
                 _state.update { it.copy(
                     driverCurrentPackages = current.items,
                     driverCurrentPage = 0,
                     driverCurrentHasMore = current.currentPage + 1 < current.totalPages,
                     driverCurrentTotalPages = current.totalPages,
-                    driverCurrentTotalCount = current.totalCount,
+                    driverCurrentTotalCount = current.totalCount
+                ) }
+                // Fetch offers (NOT cached — always fresh)
+                val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
+                _state.update { it.copy(
                     driverAvailableOffers = offers.items,
                     driverOffersPage = 0,
                     driverOffersHasMore = offers.currentPage + 1 < offers.totalPages,
@@ -1485,15 +1508,19 @@ class TripViewModel : ViewModel() {
         _state.update { it.copy(isRefreshingPackages = true) }
         viewModelScope.launch {
             try {
+                // Fetch driver's packages (cached locally)
                 val current = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                withContext(Dispatchers.IO) { PackageCache.save(current) }
-                val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
+                withContext(Dispatchers.IO) { PackageCache.saveDriver(current) }
                 _state.update { it.copy(
                     driverCurrentPackages = current.items,
                     driverCurrentPage = 0,
                     driverCurrentHasMore = current.currentPage + 1 < current.totalPages,
                     driverCurrentTotalPages = current.totalPages,
-                    driverCurrentTotalCount = current.totalCount,
+                    driverCurrentTotalCount = current.totalCount
+                ) }
+                // Fetch offers (NOT cached — always fresh)
+                val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
+                _state.update { it.copy(
                     driverAvailableOffers = offers.items,
                     driverOffersPage = 0,
                     driverOffersHasMore = offers.currentPage + 1 < offers.totalPages,
@@ -1997,7 +2024,7 @@ class TripViewModel : ViewModel() {
                 val s = _state.value
                 if (s.clientPackages.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
-                        PackageCache.save(
+                        PackageCache.saveClient(
                             PagedResult(
                                 items = s.clientPackages,
                                 totalCount = s.clientTotalCount,
@@ -2050,14 +2077,31 @@ class TripViewModel : ViewModel() {
             mediaUploads = emptyList(),
             isCreatingPackage = false
         ) }
+        SettingsRepository.clearCreatePackageDraft()
     }
 
     fun updateCreatePackageFormField(field: String, value: String) {
         _state.update { it.copy(createPackageForm = it.createPackageForm.updateField(field, value)) }
+        saveCreatePackageDraft()
     }
 
     fun updateCreatePackageFragile(fragile: Boolean) {
         _state.update { it.copy(createPackageForm = it.createPackageForm.copy(isFragile = fragile)) }
+        saveCreatePackageDraft()
+    }
+
+    private fun saveCreatePackageDraft() {
+        val form = _state.value.createPackageForm
+        SettingsRepository.saveCreatePackageDraft(
+            fromAddress = form.fromAddress,
+            toAddress = form.toAddress,
+            recipientName = form.recipientName,
+            recipientPhone = form.recipientPhone,
+            description = form.description,
+            weight = form.weight,
+            category = form.category,
+            isFragile = form.isFragile
+        )
     }
 
     fun addMediaForUpload(uri: String, byteArray: ByteArray, mimeType: String) {
@@ -2280,9 +2324,17 @@ class TripViewModel : ViewModel() {
     /**
      * Finds the locally-cached client package matching a delivery notice, matched
      * by package UUID or tracking code (whichever the notice payload carries).
+     * Searches both client packages and driver current packages.
      */
-    private fun findClientPackageForDelivery(packageUuid: String, trackingCode: String): ClientPackage? =
-        _state.value.clientPackages.find {
+    private fun findClientPackageForDelivery(packageUuid: String, trackingCode: String): ClientPackage? {
+        // Search client packages first
+        val clientPkg = _state.value.clientPackages.find {
             it.packageUuid == packageUuid || (trackingCode.isNotBlank() && it.trackingCode == trackingCode)
         }
+        if (clientPkg != null) return clientPkg
+        // Also search driver current packages (driver might be viewing as driver role but sender/receiver needs code)
+        return _state.value.driverCurrentPackages.find {
+            it.packageUuid == packageUuid || (trackingCode.isNotBlank() && it.trackingCode == trackingCode)
+        }
+    }
 }

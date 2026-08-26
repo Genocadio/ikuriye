@@ -38,6 +38,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -102,17 +106,28 @@ fun DriverHomeScreen(
     val wide   = isWideScreen()
     val maxW   = contentMaxWidth()
     var hasAppeared by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    // Sync pager → driverHomeTab (for bottom bar)
+    LaunchedEffect(pagerState.currentPage) {
+        if (driverHomeTab != pagerState.currentPage) {
+            onTabChange(pagerState.currentPage)
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+    // Sync driverHomeTab → pager (for bottom bar clicks)
+    LaunchedEffect(driverHomeTab) {
+        if (pagerState.currentPage != driverHomeTab) {
+            pagerState.animateScrollToPage(driverHomeTab)
+        }
+    }
     LaunchedEffect(Unit) { hasAppeared = true }
 
     // ── Main content composable (shared between compact and wide layouts) ─
     val mainContent: @Composable () -> Unit = {
-        AnimatedContent(
-            targetState = driverHomeTab,
-            transitionSpec = {
-                (fadeIn(tween(300)) + slideInHorizontally(tween(300)) { it / 4 }) togetherWith
-                (fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 4 })
-            },
-            label = "driverTab"
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
         ) { tab ->
             when (tab) {
                 0 -> {

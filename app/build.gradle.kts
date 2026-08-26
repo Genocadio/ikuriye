@@ -166,6 +166,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
 
+    // ── WorkManager for background sync ──────────────────────────────────
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
+
     // ── ViewModel + Compose integration ──────────────────────────────────
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")

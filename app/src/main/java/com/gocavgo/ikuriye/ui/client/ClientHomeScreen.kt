@@ -61,6 +61,13 @@ import com.gocavgo.ikuriye.util.PhoneValidation
 import com.gocavgo.ikuriye.viewmodel.AppThemeMode
 import com.gocavgo.ikuriye.viewmodel.DriverProfile
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.WindowInsets
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -94,11 +101,26 @@ fun ClientHomeScreen(
     noticeCount: Int = 0
 ) {
     val colors = LocalDriversColors.current
-    var selectedTab by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var hasAppeared by remember { mutableStateOf(false) }
     val wide = isWideScreen()
     val maxW = contentMaxWidth()
+    val haptic = LocalHapticFeedback.current
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    var selectedTab by remember { mutableIntStateOf(0) }
+    // Sync pager state → selectedTab
+    LaunchedEffect(pagerState.currentPage) {
+        if (selectedTab != pagerState.currentPage) {
+            selectedTab = pagerState.currentPage
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+    // Sync selectedTab → pager state (for bottom bar clicks)
+    LaunchedEffect(selectedTab) {
+        if (pagerState.currentPage != selectedTab) {
+            pagerState.animateScrollToPage(selectedTab)
+        }
+    }
 
     LaunchedEffect(Unit) { hasAppeared = true }
 
@@ -126,14 +148,6 @@ fun ClientHomeScreen(
     }
 
     var isSearchExpanded by remember { mutableStateOf(false) }
-    val listState = rememberLazyListState()
-
-    // Collapse search when scrolling down
-    LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
-        if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 10) {
-            isSearchExpanded = false
-        }
-    }
 
     val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
     val shimmerAlpha by infiniteTransition.animateFloat(
@@ -148,6 +162,26 @@ fun ClientHomeScreen(
     val listTopPadding = gradientHeightDp + 12.dp
     val solidStopFraction = (statusBarHeightDp / gradientHeightDp).coerceIn(0f, 1f)
 
+    // Block horizontal swipe while pull-to-refresh is active
+    var isVerticalScrolling by remember { mutableStateOf(false) }
+    val noHorizontalDuringRefresh = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // If vertical scroll is detected, block horizontal scroll
+                if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    isVerticalScrolling = true
+                }
+                return Offset.Zero
+            }
+            override fun onPostScroll(available: Offset, consumed: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y == 0f && consumed.y == 0f) {
+                    isVerticalScrolling = false
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
     // ── Main content composable (shared between compact and wide layouts) ─────
     val mainContent: @Composable () -> Unit = {
         PullToRefreshBox(
@@ -158,33 +192,29 @@ fun ClientHomeScreen(
             Box(modifier = Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
 
                 // ── Package list (scrolls behind status bar, drawn first) ─────
-                AnimatedContent(
-                    modifier = Modifier.fillMaxSize(),
-                    targetState = selectedTab,
-                    transitionSpec = {
-                        when {
-                            targetState > initialState ->
-                                (fadeIn(tween(300)) + slideInHorizontally(tween(300)) { it / 4 }) togetherWith
-                                (fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 4 })
-                            targetState < initialState ->
-                                (fadeIn(tween(300)) + slideInHorizontally(tween(300)) { -it / 4 }) togetherWith
-                                (fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { it / 4 })
-                            else -> fadeIn(tween(300)) togetherWith fadeOut(tween(200))
-                        }
-                    },
-                    label = "packageList"
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize().nestedScroll(noHorizontalDuringRefresh)
                 ) { tab ->
+                    // Each page gets its own scroll state to prevent cross-tab leaking
+                    val pageListState = rememberLazyListState()
+                    // Collapse search when scrolling down on the current page
+                    LaunchedEffect(pageListState.firstVisibleItemIndex, pageListState.firstVisibleItemScrollOffset) {
+                        if (pageListState.firstVisibleItemIndex > 0 || pageListState.firstVisibleItemScrollOffset > 10) {
+                            isSearchExpanded = false
+                        }
+                    }
                     val list = if (tab == 0) activePackages else completedPackages
                     if (isInitialLoading && list.isEmpty()) {
                         LazyColumn(
-                            state = listState,
+                            state = pageListState,
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = listTopPadding, bottom = 90.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) { items(5) { PackageSkeleton(shimmerAlpha) } }
                     } else if (list.isEmpty()) {
                         LazyColumn(
-                            state = listState,
+                            state = pageListState,
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = listTopPadding, bottom = 90.dp)
                         ) {
@@ -211,7 +241,7 @@ fun ClientHomeScreen(
                         }
                     } else {
                         LazyColumn(
-                            state = listState,
+                            state = pageListState,
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = listTopPadding, bottom = 90.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)

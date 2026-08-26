@@ -3,6 +3,7 @@ package com.gocavgo.ikuriye.data
 import android.util.Log
 import com.gocavgo.ikuriye.BuildConfig
 import com.gocavgo.ikuriye.MarkNoticeReadMutation
+import android.content.Context
 import com.gocavgo.ikuriye.NoticeCreatedSubscription
 import com.gocavgo.ikuriye.MyNoticesQuery
 import com.gocavgo.ikuriye.UnreadCountQuery
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 /**
  * Domain model for a single notice in the notification feed.
@@ -54,6 +56,9 @@ object NoticeRepository {
 
     private const val TAG = "NoticeRepository"
     private const val POLL_INTERVAL_MS = 30_000L // 30 seconds
+    private const val INITIAL_BACKOFF_MS = 1_000L
+    private const val MAX_BACKOFF_MS = 60_000L
+    private const val BACKOFF_FACTOR = 2
 
     private val _notices = MutableStateFlow<List<Notice>>(emptyList())
     val notices: StateFlow<List<Notice>> = _notices.asStateFlow()
@@ -64,6 +69,7 @@ object NoticeRepository {
     private var pollJob: Job? = null
     private var subscriptionJob: Job? = null
     private var started = false
+    private var appContext: Context? = null
 
     // Server-confirmed "read" viewer-row ids from the last fetch, used to detect
     // when a previously-read notice regresses to unread (polling/cache or backend).
@@ -73,9 +79,10 @@ object NoticeRepository {
      * Start the notice feed: initial fetch + GraphQL subscription + fallback polling.
      * Safe to call multiple times — subsequent calls are no-ops.
      */
-    fun start(scope: CoroutineScope) {
+    fun start(scope: CoroutineScope, context: Context? = null) {
         if (started) return
         started = true
+        if (context != null) appContext = context
 
         // Initial fetch
         scope.launch {
@@ -112,46 +119,151 @@ object NoticeRepository {
         pollJob = null
     }
 
-    // ── GraphQL subscription ───────────────────────────────────────────────────
+    // ── GraphQL subscription with auto-reconnect ────────────────────────────
 
     private suspend fun startSubscription() {
-        try {
-            ApolloClientProvider.client
-                .subscription(NoticeCreatedSubscription())
-                .toFlow()
-                .collect { response ->
-                if (!started) return@collect
-                if (response.errors != null && response.errors!!.isNotEmpty()) {
-                    Log.e(TAG, "subscription: ${response.errors!!.joinToString { it.message ?: "" }}")
-                    return@collect
-                }
-                val gql = response.data?.noticeCreated ?: return@collect
-                val notice = Notice(
-                    id = gql.id,
-                    resourceType = gql.resourceType,
-                    resourceId = gql.resourceId,
-                    eventType = gql.eventType,
-                    actorId = gql.actorId,
-                    title = gql.title,
-                    message = gql.message,
-                    payload = gql.payload,
-                    viewerId = gql.viewer.id,
-                    viewerNoticeId = gql.viewer.noticeId,
-                    viewerReadAt = gql.viewer.readAt,
-                    createdAt = gql.createdAt
-                )
-                // Deduplicate — the 30s poll may have already fetched this notice.
-                val existing = _notices.value.find { it.viewerId == notice.viewerId }
-                if (existing == null) {
-                    _notices.update { list ->
-                        (list + notice).sortedBy { it.viewerReadAt != null }
+        var backoffMs = INITIAL_BACKOFF_MS
+
+        while (started) {
+            try {
+                if (BuildConfig.DEBUG) Log.d(TAG, "subscription: connecting...")
+                ApolloClientProvider.client
+                    .subscription(NoticeCreatedSubscription())
+                    .toFlow()
+                    .collect { response ->
+                        // Successful connection — reset backoff
+                        backoffMs = INITIAL_BACKOFF_MS
+
+                        if (!started) return@collect
+                        if (response.errors != null && response.errors!!.isNotEmpty()) {
+                            Log.e(TAG, "subscription: ${response.errors!!.joinToString { it.message ?: "" }}")
+                            return@collect
+                        }
+                        val gql = response.data?.noticeCreated ?: return@collect
+                        val notice = Notice(
+                            id = gql.id,
+                            resourceType = gql.resourceType,
+                            resourceId = gql.resourceId,
+                            eventType = gql.eventType,
+                            actorId = gql.actorId,
+                            title = gql.title,
+                            message = gql.message,
+                            payload = gql.payload,
+                            viewerId = gql.viewer.id,
+                            viewerNoticeId = gql.viewer.noticeId,
+                            viewerReadAt = gql.viewer.readAt,
+                            createdAt = gql.createdAt
+                        )
+                        // Deduplicate — the 30s poll may have already fetched this notice.
+                        val existing = _notices.value.find { it.viewerId == notice.viewerId }
+                        if (existing == null) {
+                            _notices.update { list ->
+                                (list + notice).sortedBy { it.viewerReadAt != null }
+                            }
+                            _unreadCount.value = _unreadCount.value + 1
+                            if (BuildConfig.DEBUG) Log.d(TAG, "subscription: new notice ${notice.id} (${notice.eventType})")
+                            // Show local Android notification for important events
+                            showLocalNotification(notice)
+                        }
                     }
-                    _unreadCount.value = _unreadCount.value + 1
-                    if (BuildConfig.DEBUG) Log.d(TAG, "subscription: new notice ${notice.id} (${notice.eventType})")
-                }
+                // Flow completed — server closed the stream, reconnect
+                if (BuildConfig.DEBUG) Log.w(TAG, "subscription stream ended, reconnecting in ${backoffMs}ms")
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.w(TAG, "subscription error: ${e.message}, reconnecting in ${backoffMs}ms")
             }
+
+            if (!started) break
+            delay(backoffMs)
+            backoffMs = (backoffMs * BACKOFF_FACTOR).coerceAtMost(MAX_BACKOFF_MS)
+        }
+    }
+
+    // ── Local Android notification for delivery code ───────────────────────
+
+    private fun showLocalNotification(notice: Notice) {
+        val context = appContext ?: return
+
+        try {
+            val channelId: String
+            val title: String
+            val text: String
+            val bigText: String
+            val importance: Int
+
+            when (notice.eventType) {
+                "PACKAGE_DELIVERY_INITIATED" -> {
+                    channelId = "delivery_codes"
+                    title = "Delivery Code Available"
+                    val payload = notice.payload ?: return
+                    val deliveryCode = try {
+                        JSONObject(payload).optString("deliveryCode").takeIf { it.isNotBlank() }
+                    } catch (_: Exception) { null } ?: return
+                    val trackingCode = try {
+                        JSONObject(payload).optString("trackingCode")
+                    } catch (_: Exception) { "" }
+                    text = "Code: $deliveryCode for package $trackingCode"
+                    bigText = "Delivery code: $deliveryCode\nPackage: $trackingCode\nShow this code to the driver to confirm delivery."
+                    importance = android.app.NotificationManager.IMPORTANCE_HIGH
+                }
+                "PACKAGE_ACCEPTED" -> {
+                    channelId = "package_updates"
+                    title = "Package Accepted"
+                    text = notice.message
+                    bigText = "Your package ${notice.resourceId} has been accepted by a driver and is being picked up."
+                    importance = android.app.NotificationManager.IMPORTANCE_DEFAULT
+                }
+                "PACKAGE_DELIVERED" -> {
+                    channelId = "package_updates"
+                    title = "Package Delivered"
+                    text = notice.message
+                    bigText = "Your package ${notice.resourceId} has been delivered successfully."
+                    importance = android.app.NotificationManager.IMPORTANCE_HIGH
+                }
+                "PACKAGE_PICKED_UP" -> {
+                    channelId = "package_updates"
+                    title = "Package Picked Up"
+                    text = notice.message
+                    bigText = "Your package ${notice.resourceId} has been picked up and is on its way."
+                    importance = android.app.NotificationManager.IMPORTANCE_DEFAULT
+                }
+                else -> return // Don't show local notification for other event types
+            }
+
+            val manager = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+
+            // Create channel if needed (Android 8+)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val channel = android.app.NotificationChannel(
+                    channelId,
+                    when (channelId) {
+                        "delivery_codes" -> "Delivery Codes"
+                        else -> "Package Updates"
+                    },
+                    importance
+                ).apply {
+                    description = when (channelId) {
+                        "delivery_codes" -> "Notifications when a delivery code is issued"
+                        else -> "Package status update notifications"
+                    }
+                }
+                manager.createNotificationChannel(channel)
+            }
+
+            val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(
+                    androidx.core.app.NotificationCompat.BigTextStyle().bigText(bigText)
+                )
+                .setPriority(importance)
+                .setAutoCancel(true)
+                .build()
+
+            manager.notify(notice.id.hashCode(), notification)
+            if (BuildConfig.DEBUG) Log.d(TAG, "local notification shown: ${notice.eventType}")
         } catch (e: Exception) {
-            if (BuildConfig.DEBUG) Log.w(TAG, "subscription ended: ${e.message}")
+            if (BuildConfig.DEBUG) Log.e(TAG, "showLocalNotification failed: ${e.message}", e)
         }
     }
 
