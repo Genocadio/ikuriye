@@ -125,9 +125,10 @@ fun ClientHomeScreen(
     onGeneratePickupCode: (String) -> Unit = {},
     hasUnsavedDraft: Boolean = false,
     packagesFetchedOnce: Boolean = false,
+    clientDataState: com.gocavgo.ikuriye.viewmodel.DataState = com.gocavgo.ikuriye.viewmodel.DataState.UNKNOWN,
     onNoticesClick: () -> Unit = {},
     noticeCount: Int = 0
-) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, onNoticesClick = onNoticesClick, noticeCount = noticeCount)
+) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, clientDataState, onNoticesClick = onNoticesClick, noticeCount = noticeCount)
 
 @Composable
 fun CreatePackageScreen(

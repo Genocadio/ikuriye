@@ -480,7 +480,13 @@ class TripViewModel : ViewModel() {
                 themeMode       = AppThemeMode.SYSTEM,
                 isPipEnabled    = false,
                 driverHomeTab   = 0,
-                driverPackageSubTab = 0
+                driverPackageSubTab = 0,
+                clientPackages = emptyList(),
+                clientDataState = DataState.UNKNOWN,
+                clientPackagesFetchedOnce = false,
+                isClientInitialLoading = false,
+                driverCurrentPackages = emptyList(),
+                driverAvailableOffers = emptyList()
             )
         }
     }
@@ -1002,7 +1008,9 @@ class TripViewModel : ViewModel() {
     private fun restoreNavigationState() {
         val screenKey = SettingsRepository.getResumeScreenKey() ?: return
         when (screenKey) {
-            "create" -> openCreatePackage()
+            // Don't restore create modal on relaunch — let fetchClientPackages() 
+            // determine via clientDataState whether to auto-open it.
+            "create" -> { /* handled by auto-open logic in ClientHomeScreen */ }
             "track" -> {
                 val pkgId = SettingsRepository.getResumePackageId()
                 if (pkgId != null) trackPackage(pkgId)
@@ -1047,6 +1055,11 @@ class TripViewModel : ViewModel() {
             AuthRepository.signOut()
         }
         SettingsRepository.clear()
+        PackageCache.clear()
+        // Cancel background sync worker
+        AuthRepository.getAppContext()?.let { ctx ->
+            com.gocavgo.ikuriye.service.PackageSyncWorker.cancel(ctx)
+        }
         _state.update {
             it.copy(
                 isClientLoggedIn = false,
@@ -1057,7 +1070,11 @@ class TripViewModel : ViewModel() {
                 isClientSettingsOpen = false,
                 appRole = AppRole.NONE,
                 authResult = null,
-                authUser = null
+                authUser = null,
+                clientPackages = emptyList(),
+                clientDataState = DataState.UNKNOWN,
+                clientPackagesFetchedOnce = false,
+                isClientInitialLoading = false
             )
         }
     }
@@ -1212,7 +1229,8 @@ class TripViewModel : ViewModel() {
                         isCreatingPackage = false,
                         isSubmittingPackage = false,
                         createPackageForm = CreatePackageFormState(),
-                        mediaUploads = emptyList()
+                        mediaUploads = emptyList(),
+                        clientDataState = DataState.HAS_DATA
                     )
                 }
                 SettingsRepository.clearCreatePackageDraft()
@@ -1236,24 +1254,31 @@ class TripViewModel : ViewModel() {
 
     fun fetchClientPackages() {
         viewModelScope.launch {
-            _state.update { it.copy(clientCurrentPage = 0) }
+            _state.update { it.copy(clientCurrentPage = 0, clientDataState = DataState.LOADING) }
+
             // Local-first: show cached data immediately, no loading spinner
             val cached = withContext(Dispatchers.IO) { PackageCache.getClientCached() }
-            if (cached != null) {
+            if (cached != null && cached.items.isNotEmpty()) {
+                // Cache has packages → show immediately, we know data exists
                 _state.update { it.copy(
                     clientPackages = cached.items,
                     clientCurrentPage = 0,
                     clientHasMore = cached.currentPage + 1 < cached.totalPages,
                     clientTotalPages = cached.totalPages,
                     clientTotalCount = cached.totalCount,
-                    clientPackagesFetchedOnce = true
+                    clientPackagesFetchedOnce = true,
+                    clientDataState = DataState.HAS_DATA
                 ) }
-                // Don't show loading spinner — user sees cached data immediately
+            } else if (cached != null && cached.items.isEmpty()) {
+                // Cache exists but empty → we know server had no packages at cache time
+                // Don't set NO_DATA yet — server might have new packages now
+                _state.update { it.copy(clientPackagesFetchedOnce = true) }
             } else {
                 // No cache at all — show loading on first load only
                 _state.update { it.copy(isClientInitialLoading = true) }
             }
-            // Always fetch fresh data in background and merge
+
+            // Always fetch fresh data in background and update
             try {
                 val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
                 withContext(Dispatchers.IO) { PackageCache.saveClient(result) }
@@ -1263,10 +1288,20 @@ class TripViewModel : ViewModel() {
                     clientHasMore = result.currentPage + 1 < result.totalPages,
                     clientTotalPages = result.totalPages,
                     clientTotalCount = result.totalCount,
-                    clientPackagesFetchedOnce = true
+                    clientPackagesFetchedOnce = true,
+                    // Definitive: server responded with actual data
+                    clientDataState = if (result.items.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
                 ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "fetchClientPackages: ${e.message}", e)
+                // Network failed — DON'T set NO_DATA (we don't know)
+                // If cache had data, keep HAS_DATA; otherwise stay UNKNOWN/LOADING
+                val currentState = _state.value.clientDataState
+                _state.update { it.copy(
+                    clientPackagesFetchedOnce = true,
+                    // Keep existing state if we had cache data, otherwise stay UNKNOWN
+                    clientDataState = if (currentState == DataState.HAS_DATA) DataState.HAS_DATA else DataState.UNKNOWN
+                ) }
             } finally {
                 _state.update { it.copy(isClientInitialLoading = false) }
             }
@@ -1274,6 +1309,11 @@ class TripViewModel : ViewModel() {
     }
 
     fun refreshClientPackages() {
+        // Don't clear cache if offline — just show existing data
+        if (!AuthRepository.isNetworkAvailable()) {
+            viewModelScope.launch { _toastEvent.emit("No internet — showing cached data") }
+            return
+        }
         _state.update { it.copy(isRefreshingPackages = true) }
         viewModelScope.launch {
             try {
@@ -1284,10 +1324,12 @@ class TripViewModel : ViewModel() {
                     clientCurrentPage = 0,
                     clientHasMore = result.currentPage + 1 < result.totalPages,
                     clientTotalPages = result.totalPages,
-                    clientTotalCount = result.totalCount
+                    clientTotalCount = result.totalCount,
+                    clientDataState = if (result.items.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
                 ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "refreshClientPackages: ${e.message}", e)
+                // Don't clear existing data on failure — keep showing what we have
             } finally {
                 _state.update { it.copy(isRefreshingPackages = false) }
             }
@@ -1498,6 +1540,8 @@ class TripViewModel : ViewModel() {
                 ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadDriverPackages: ${e.message}", e)
+                // Network failed — no cache exists, mark as fetched so UI doesn't show spinner forever
+                _state.update { it.copy(isDriverInitialLoading = false) }
             } finally {
                 _state.update { it.copy(isDriverInitialLoading = false) }
             }
@@ -1505,6 +1549,11 @@ class TripViewModel : ViewModel() {
     }
 
     fun refreshDriverPackages() {
+        // Don't clear cache if offline — just show existing data
+        if (!AuthRepository.isNetworkAvailable()) {
+            viewModelScope.launch { _toastEvent.emit("No internet — showing cached data") }
+            return
+        }
         _state.update { it.copy(isRefreshingPackages = true) }
         viewModelScope.launch {
             try {
@@ -1529,6 +1578,7 @@ class TripViewModel : ViewModel() {
                 ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "refreshDriverPackages: ${e.message}", e)
+                // Don't clear existing data on failure — keep showing what we have
             } finally {
                 _state.update { it.copy(isRefreshingPackages = false) }
             }
@@ -2247,7 +2297,8 @@ class TripViewModel : ViewModel() {
                     _state.update { s ->
                         val exists = s.clientPackages.any { it.packageUuid == pkg.packageUuid || it.id == pkg.id }
                         s.copy(
-                            clientPackages = if (exists) s.clientPackages else listOf(pkg) + s.clientPackages
+                            clientPackages = if (exists) s.clientPackages else listOf(pkg) + s.clientPackages,
+                            clientDataState = DataState.HAS_DATA
                         )
                     }
                     trackPackage(pkg.id)

@@ -23,7 +23,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.drawWithContent
@@ -97,6 +97,7 @@ fun ClientHomeScreen(
     onGeneratePickupCode: (String) -> Unit = {},
     hasUnsavedDraft: Boolean = false,
     packagesFetchedOnce: Boolean = false,
+    clientDataState: com.gocavgo.ikuriye.viewmodel.DataState = com.gocavgo.ikuriye.viewmodel.DataState.UNKNOWN,
     onNoticesClick: () -> Unit = {},
     noticeCount: Int = 0
 ) {
@@ -131,12 +132,14 @@ fun ClientHomeScreen(
         it.status == PackageStatus.OUT_FOR_DELIVERY) &&
         (searchQuery.isBlank() || it.id.contains(searchQuery, ignoreCase = true))
     }
-    // ── Auto-open create package panel when packages have been fetched once and there are none ──
-    // Uses packagesFetchedOnce as key (passed from state) — avoids opening before data loads.
-    // isInitialLoading is also used to handle the skeleton-loading case.
+    // ── Auto-open create package panel ONLY when server/cache definitively confirms zero packages ──
+    // Uses clientDataState to avoid opening on network failure or during loading.
+    // - NO_DATA: server responded with empty list → safe to show create modal
+    // - UNKNOWN/LOADING: don't open yet (backend unreachable, or still fetching)
+    // - HAS_DATA: packages exist → never open modal
     var preventedAutoOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(isInitialLoading, packagesFetchedOnce) {
-        if (!isInitialLoading && packagesFetchedOnce && activePackages.isEmpty() && !preventedAutoOpen) {
+    LaunchedEffect(clientDataState) {
+        if (clientDataState == com.gocavgo.ikuriye.viewmodel.DataState.NO_DATA && !preventedAutoOpen) {
             preventedAutoOpen = true
             onCreatePackage()
         }
@@ -197,13 +200,7 @@ fun ClientHomeScreen(
                     modifier = Modifier.fillMaxSize().nestedScroll(noHorizontalDuringRefresh)
                 ) { tab ->
                     // Each page gets its own scroll state to prevent cross-tab leaking
-                    val pageListState = rememberLazyListState()
-                    // Collapse search when scrolling down on the current page
-                    LaunchedEffect(pageListState.firstVisibleItemIndex, pageListState.firstVisibleItemScrollOffset) {
-                        if (pageListState.firstVisibleItemIndex > 0 || pageListState.firstVisibleItemScrollOffset > 10) {
-                            isSearchExpanded = false
-                        }
-                    }
+                    val pageListState = remember { LazyListState() }
                     val list = if (tab == 0) activePackages else completedPackages
                     if (isInitialLoading && list.isEmpty()) {
                         LazyColumn(

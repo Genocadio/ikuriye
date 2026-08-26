@@ -577,6 +577,7 @@ class MainActivity : ComponentActivity() {
                                         onGeneratePickupCode = vm::generatePickupCode,
                                         hasUnsavedDraft = hasUnsavedDraft,
                                         packagesFetchedOnce = state.clientPackagesFetchedOnce,
+                                        clientDataState = state.clientDataState,
                                         onNoticesClick = vm::toggleNotices,
                                         noticeCount = state.noticeCount
                                     )

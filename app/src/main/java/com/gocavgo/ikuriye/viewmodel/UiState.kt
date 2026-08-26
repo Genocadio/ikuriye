@@ -84,6 +84,17 @@ enum class AppThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class AppRole { NONE, DRIVER, CLIENT }
 
+/**
+ * Tracks whether we have definitive knowledge of the user's package data.
+ * Used to decide when to auto-open the create-package modal.
+ *
+ * - UNKNOWN: no data loaded yet (first frame after login/launch)
+ * - LOADING: fetching from server, no definitive answer yet
+ * - HAS_DATA: server/cache confirmed packages exist
+ * - NO_DATA: server/cache confirmed zero packages (safe to open create modal)
+ */
+enum class DataState { UNKNOWN, LOADING, HAS_DATA, NO_DATA }
+
 // ── UI State ───────────────────────────────────────────────────────────────────
 
 data class TripUiState(
@@ -133,6 +144,12 @@ data class TripUiState(
     val isLoadingMorePackages: Boolean = false,
     val isClientInitialLoading: Boolean = false,
     val clientPackagesFetchedOnce: Boolean = false,
+    /**
+     * Definitive knowledge of whether packages exist.
+     * UNKNOWN = no data yet; LOADING = fetching; HAS_DATA = packages exist; NO_DATA = confirmed empty.
+     * Auto-open create modal only when NO_DATA is definitive.
+     */
+    val clientDataState: DataState = DataState.UNKNOWN,
     val isDriverInitialLoading: Boolean = false,
     // Client pagination
     val clientCurrentPage: Int = 0,

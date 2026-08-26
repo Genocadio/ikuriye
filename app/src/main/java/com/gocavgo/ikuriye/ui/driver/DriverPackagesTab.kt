@@ -253,14 +253,9 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                     state = pagerState,
                     modifier = Modifier.fillMaxSize().nestedScroll(noHorizontalDuringRefresh)
                 ) { tab ->
-                        val listState = rememberLazyListState()
+                        val listState = remember { LazyListState() }
                         
-                        // Collapse search when scrolling down
-                        LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
-                            if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 20) {
-                                isSearchExpanded = false
-                            }
-                        }
+                        // Search collapse handled by search bar toggle
                         
                         when (tab) {                            0 -> {
                             if (isDriverInitLoading && filteredCurrent.isEmpty() && !isSelection) {
