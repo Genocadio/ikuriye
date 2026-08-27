@@ -30,34 +30,65 @@ object ApolloClientProvider {
     private var lastRefreshFailedAtMs = 0L
     private val REFRESH_COOLDOWN_MS = 30_000L
 
-    val client: ApolloClient by lazy {
+    @Volatile
+    private var internalClient: ApolloClient? = null
+    private val clientLock = Any()
+
+    val client: ApolloClient
+        get() {
+            var instance = internalClient
+            if (instance == null) {
+                synchronized(clientLock) {
+                    instance = internalClient
+                    if (instance == null) {
+                        instance = buildClient()
+                        internalClient = instance
+                    }
+                }
+            }
+            return instance!!
+        }
+
+    /**
+     * Resets the ApolloClient instance so the next access builds a fresh client
+     * with updated auth headers for HTTP and WebSocket upgrade transports.
+     */
+    fun resetClient() {
+        synchronized(clientLock) {
+            try {
+                internalClient?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing ApolloClient during reset: ${e.message}")
+            }
+            internalClient = null
+            Log.d(TAG, "ApolloClient reset — will rebuild with current credentials")
+        }
+    }
+
+    private fun buildClient(): ApolloClient {
         val okHttpClient = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
 
-        ApolloClient.Builder()
+        val token = NexxAuth.getAccessToken()
+        val wsHeaders = listOfNotNull(
+            token?.let { HttpHeader("Authorization", "Bearer $it") }
+        )
+
+        return ApolloClient.Builder()
             .serverUrl(BuildConfig.GRAPHQL_URL)
             .httpEngine(DefaultHttpEngine(okHttpClient))
             .subscriptionNetworkTransport(
                 WebSocketNetworkTransport.Builder()
                     .serverUrl(BuildConfig.GRAPHQL_URL)
-                    .headers(
-                        // Send auth in the HTTP upgrade request so Spring Security
-                        // can authenticate the WebSocket handshake and propagate the
-                        // security context to subscription resolver threads.
-                        listOfNotNull(
-                            NexxAuth.getAccessToken()?.let { token ->
-                                HttpHeader("Authorization", "Bearer $token")
-                            }
-                        )
-                    )
+                    .headers(wsHeaders)
                     .protocol(
                         GraphQLWsProtocol.Factory(
                             connectionPayload = {
-                                val token = NexxAuth.getAccessToken()
-                                if (token != null) mapOf("Authorization" to "Bearer $token")
+                                val currentToken = NexxAuth.getAccessToken()
+                                if (currentToken != null) mapOf("Authorization" to "Bearer $currentToken")
                                 else emptyMap()
                             }
                         )

@@ -180,8 +180,9 @@ class TripViewModel : ViewModel() {
                 // Step 2: start proactive session observation (refresh near expiry).
                 NexxAuth.observeSession(this@TripViewModel.viewModelScope)
 
-                // Step 2b: start notice feed (Realtime subscription + initial fetch)
-                NoticeRepository.start(this@TripViewModel.viewModelScope, AuthRepository.getAppContext())
+                // Step 2b: reset Apollo client and start notice feed (Realtime subscription + initial fetch)
+                ApolloClientProvider.resetClient()
+                NoticeRepository.restart(this@TripViewModel.viewModelScope, AuthRepository.getAppContext())
                 collectNotices()
 
                 // Step 3: fetch initial data now that we have a valid session
@@ -191,7 +192,7 @@ class TripViewModel : ViewModel() {
                         startPackageSubscription()
                     }
                     else -> {
-                        fetchClientPackages()
+                        fetchClientPackages(isFreshLogin = false)
                     }
                 }
                 // Schedule background sync worker
@@ -383,6 +384,9 @@ class TripViewModel : ViewModel() {
             is AuthResult.Success -> {
                 val user = result.user
                 _state.update { it.copy(authUser = user) }
+                // Reset Apollo client so new token is used for all HTTP and WebSocket connections
+                ApolloClientProvider.resetClient()
+
                 when (user.role.name) {
                     "DRIVER" -> {
                         _state.update {
@@ -417,11 +421,11 @@ class TripViewModel : ViewModel() {
                                 )
                             )
                         }
-                        fetchClientPackages()
+                        fetchClientPackages(isFreshLogin = true)
                     }
                 }
-                // Start notice feed on fresh login
-                NoticeRepository.start(this@TripViewModel.viewModelScope, AuthRepository.getAppContext())
+                // Start notice feed on fresh login with fresh subscription
+                NoticeRepository.restart(this@TripViewModel.viewModelScope, AuthRepository.getAppContext())
                 collectNotices()
                 // Schedule background sync worker
                 AuthRepository.getAppContext()?.let { ctx ->
@@ -454,6 +458,7 @@ class TripViewModel : ViewModel() {
         NoticeRepository.stop()
         stopPackageSubscription()
         autoShownDeliveryNotices.clear()
+        ApolloClientProvider.resetClient()
         viewModelScope.launch {
             AuthRepository.signOut()
         }
@@ -1024,6 +1029,7 @@ class TripViewModel : ViewModel() {
 
     fun goBackToRoleSelect() {
         NoticeRepository.stop()
+        ApolloClientProvider.resetClient()
         viewModelScope.launch {
             AuthRepository.signOut()
         }
@@ -1051,6 +1057,7 @@ class TripViewModel : ViewModel() {
     fun clientLogout() {
         NoticeRepository.stop()
         autoShownDeliveryNotices.clear()
+        ApolloClientProvider.resetClient()
         viewModelScope.launch {
             AuthRepository.signOut()
         }
@@ -1252,36 +1259,41 @@ class TripViewModel : ViewModel() {
         }
     }
 
-    fun fetchClientPackages() {
+    fun fetchClientPackages(isFreshLogin: Boolean = false) {
         viewModelScope.launch {
             _state.update { it.copy(clientCurrentPage = 0, clientDataState = DataState.LOADING) }
 
-            // Local-first: show cached data immediately, no loading spinner
-            val cached = withContext(Dispatchers.IO) { PackageCache.getClientCached() }
-            if (cached != null && cached.items.isNotEmpty()) {
-                // Cache has packages → show immediately, we know data exists
-                _state.update { it.copy(
-                    clientPackages = cached.items,
-                    clientCurrentPage = 0,
-                    clientHasMore = cached.currentPage + 1 < cached.totalPages,
-                    clientTotalPages = cached.totalPages,
-                    clientTotalCount = cached.totalCount,
-                    clientPackagesFetchedOnce = true,
-                    clientDataState = DataState.HAS_DATA
-                ) }
-            } else if (cached != null && cached.items.isEmpty()) {
-                // Cache exists but empty → we know server had no packages at cache time
-                // Don't set NO_DATA yet — server might have new packages now
-                _state.update { it.copy(clientPackagesFetchedOnce = true) }
+            var hasActiveCached = false
+            if (!isFreshLogin) {
+                // Pre-logged in / session restore: Check cache first
+                val cached = withContext(Dispatchers.IO) { PackageCache.getClientCached() }
+                if (cached != null && cached.items.isNotEmpty()) {
+                    hasActiveCached = cached.items.any { it.isActive() }
+                    _state.update { it.copy(
+                        clientPackages = cached.items,
+                        clientCurrentPage = 0,
+                        clientHasMore = cached.currentPage + 1 < cached.totalPages,
+                        clientTotalPages = cached.totalPages,
+                        clientTotalCount = cached.totalCount,
+                        clientPackagesFetchedOnce = true,
+                        // If cached has active packages, we know data exists; otherwise keep LOADING until backend confirms
+                        clientDataState = if (hasActiveCached) DataState.HAS_DATA else DataState.LOADING
+                    ) }
+                } else if (cached != null && cached.items.isEmpty()) {
+                    _state.update { it.copy(clientPackagesFetchedOnce = true) }
+                } else {
+                    _state.update { it.copy(isClientInitialLoading = true) }
+                }
             } else {
-                // No cache at all — show loading on first load only
+                // Fresh login: Check backend first, show initial loading
                 _state.update { it.copy(isClientInitialLoading = true) }
             }
 
-            // Always fetch fresh data in background and update
+            // Always fetch fresh data from backend
             try {
                 val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
                 withContext(Dispatchers.IO) { PackageCache.saveClient(result) }
+                val hasActive = result.items.any { it.isActive() }
                 _state.update { it.copy(
                     clientPackages = result.items,
                     clientCurrentPage = 0,
@@ -1289,18 +1301,16 @@ class TripViewModel : ViewModel() {
                     clientTotalPages = result.totalPages,
                     clientTotalCount = result.totalCount,
                     clientPackagesFetchedOnce = true,
-                    // Definitive: server responded with actual data
-                    clientDataState = if (result.items.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
+                    // Definitive: If no active packages exist, set NO_DATA to trigger create modal
+                    clientDataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
                 ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "fetchClientPackages: ${e.message}", e)
                 // Network failed — DON'T set NO_DATA (we don't know)
-                // If cache had data, keep HAS_DATA; otherwise stay UNKNOWN/LOADING
-                val currentState = _state.value.clientDataState
+                // If cache had active packages, keep HAS_DATA; otherwise stay UNKNOWN
                 _state.update { it.copy(
                     clientPackagesFetchedOnce = true,
-                    // Keep existing state if we had cache data, otherwise stay UNKNOWN
-                    clientDataState = if (currentState == DataState.HAS_DATA) DataState.HAS_DATA else DataState.UNKNOWN
+                    clientDataState = if (hasActiveCached) DataState.HAS_DATA else DataState.UNKNOWN
                 ) }
             } finally {
                 _state.update { it.copy(isClientInitialLoading = false) }
@@ -1319,13 +1329,14 @@ class TripViewModel : ViewModel() {
             try {
                 val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
                 withContext(Dispatchers.IO) { PackageCache.saveClient(result) }
+                val hasActive = result.items.any { it.isActive() }
                 _state.update { it.copy(
                     clientPackages = result.items,
                     clientCurrentPage = 0,
                     clientHasMore = result.currentPage + 1 < result.totalPages,
                     clientTotalPages = result.totalPages,
                     clientTotalCount = result.totalCount,
-                    clientDataState = if (result.items.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
+                    clientDataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
                 ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "refreshClientPackages: ${e.message}", e)

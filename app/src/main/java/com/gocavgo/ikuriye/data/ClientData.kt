@@ -63,6 +63,14 @@ data class ClientPackage(
     val packageUuid: String = ""
 )
 
+/**
+ * Returns true if the package is in an active (in-progress) delivery state.
+ * Terminal states (DELIVERED, CANCELLED) return false.
+ */
+fun ClientPackage.isActive(): Boolean =
+    status != PackageStatus.DELIVERED && status != PackageStatus.CANCELLED
+
+
 data class CustodianInfo(
     val id: String,
     val userId: String,

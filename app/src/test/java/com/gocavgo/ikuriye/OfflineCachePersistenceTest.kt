@@ -9,11 +9,13 @@ import com.gocavgo.ikuriye.viewmodel.DataState
 import org.junit.Assert.*
 import org.junit.Test
 
+import com.gocavgo.ikuriye.data.isActive
+
 /**
  * Verifies the offline cache flow logic with the DataState-based approach.
  *
  * Key rule: auto-open create modal ONLY when DataState.NO_DATA (server/cache definitively
- * confirmed zero packages). Never open on UNKNOWN (backend unreachable) or LOADING (still fetching).
+ * confirmed zero ACTIVE packages). Never open on UNKNOWN (backend unreachable) or LOADING (still fetching).
  */
 class OfflineCachePersistenceTest {
 
@@ -61,27 +63,104 @@ class OfflineCachePersistenceTest {
         // Scenario: first launch, no cache, server returns empty → open modal
         var dataState = DataState.LOADING
 
-        // Server responds with empty list
+        // Server responds with empty list (no active packages)
         val serverResult = emptyList<ClientPackage>()
-        dataState = if (serverResult.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
+        val hasActive = serverResult.any { it.isActive() }
+        dataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
 
         val shouldAutoOpen = dataState == DataState.NO_DATA
 
         assertEquals(DataState.NO_DATA, dataState)
-        assertTrue("Should auto-open: server confirmed zero packages", shouldAutoOpen)
+        assertTrue("Should auto-open: server confirmed zero active packages", shouldAutoOpen)
     }
 
     @Test
-    fun autoOpen_serverReturnsPackages_setsHasData_noModal() {
+    fun autoOpen_serverReturnsActivePackages_setsHasData_noModal() {
         var dataState = DataState.LOADING
 
-        val serverResult = listOf(createTestPackage(id = "CAV-001"))
-        dataState = if (serverResult.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
+        val serverResult = listOf(createTestPackage(id = "CAV-001", status = PackageStatus.IN_TRANSIT))
+        val hasActive = serverResult.any { it.isActive() }
+        dataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
 
         val shouldAutoOpen = dataState == DataState.NO_DATA
 
         assertEquals(DataState.HAS_DATA, dataState)
-        assertFalse("Should NOT auto-open: server confirmed packages exist", shouldAutoOpen)
+        assertFalse("Should NOT auto-open: server confirmed active packages exist", shouldAutoOpen)
+    }
+
+    @Test
+    fun autoOpen_onlyCompletedPackages_setsNoData_opensModal() {
+        // Scenario: user has only completed/cancelled packages → 0 active packages → open create modal
+        val packages = listOf(
+            createTestPackage(id = "CAV-001", status = PackageStatus.DELIVERED),
+            createTestPackage(id = "CAV-002", status = PackageStatus.CANCELLED)
+        )
+
+        val hasActive = packages.any { it.isActive() }
+        val dataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
+
+        val shouldAutoOpen = dataState == DataState.NO_DATA
+
+        assertEquals(DataState.NO_DATA, dataState)
+        assertTrue("Should auto-open: no active packages (only completed/cancelled)", shouldAutoOpen)
+    }
+
+    @Test
+    fun autoOpen_freshLogin_bypassesCache_checksBackend_noActive_opensModal() {
+        // Fresh login: ignores any old cache, starts in LOADING
+        var dataState = DataState.LOADING
+        assertEquals(DataState.LOADING, dataState)
+
+        // Backend returns only delivered packages
+        val serverResult = listOf(createTestPackage(id = "CAV-OLD", status = PackageStatus.DELIVERED))
+        val hasActive = serverResult.any { it.isActive() }
+        dataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
+
+        assertEquals(DataState.NO_DATA, dataState)
+        assertTrue("Fresh login should auto-open when backend has no active packages", dataState == DataState.NO_DATA)
+    }
+
+    @Test
+    fun autoOpen_freshLogin_bypassesCache_checksBackend_hasActive_noModal() {
+        // Fresh login: ignores cache, starts in LOADING
+        var dataState = DataState.LOADING
+
+        // Backend returns an active package (PENDING_CONFIRMATION)
+        val serverResult = listOf(createTestPackage(id = "CAV-ACTIVE", status = PackageStatus.PENDING_CONFIRMATION))
+        val hasActive = serverResult.any { it.isActive() }
+        dataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
+
+        assertEquals(DataState.HAS_DATA, dataState)
+        assertFalse("Fresh login should NOT auto-open when backend has active packages", dataState == DataState.NO_DATA)
+    }
+
+    @Test
+    fun autoOpen_sessionRestore_cacheHasActive_setsHasDataImmediately() {
+        // Pre-logged-in session restore: cache has active package
+        val cached = listOf(createTestPackage(id = "CAV-001", status = PackageStatus.PENDING))
+        val hasActiveCached = cached.any { it.isActive() }
+        val dataState = if (hasActiveCached) DataState.HAS_DATA else DataState.LOADING
+
+        assertEquals(DataState.HAS_DATA, dataState)
+        assertFalse("Session restore should NOT open modal when cache has active packages", dataState == DataState.NO_DATA)
+    }
+
+    @Test
+    fun autoOpen_sessionRestore_cacheNoActive_waitsForBackend() {
+        // Pre-logged-in session restore: cache has only delivered packages
+        val cached = listOf(createTestPackage(id = "CAV-001", status = PackageStatus.DELIVERED))
+        val hasActiveCached = cached.any { it.isActive() }
+        var dataState = if (hasActiveCached) DataState.HAS_DATA else DataState.LOADING
+
+        assertEquals(DataState.LOADING, dataState) // Does not open modal yet!
+
+        // Backend then confirms no active packages
+        val serverResult = emptyList<ClientPackage>()
+        val hasActiveServer = serverResult.any { it.isActive() }
+        dataState = if (!hasActiveServer) DataState.NO_DATA else DataState.HAS_DATA
+
+        assertEquals(DataState.NO_DATA, dataState)
+        assertTrue("Opens modal after backend confirms no active packages", dataState == DataState.NO_DATA)
     }
 
     @Test
@@ -100,68 +179,13 @@ class OfflineCachePersistenceTest {
 
     @Test
     fun autoOpen_networkFailsButHasCache_keepsHasData_noModal() {
-        // Scenario: has cache with packages, network fails → keep HAS_DATA
-        var dataState = DataState.HAS_DATA // Cache had packages
-
-        // Network fails → keep HAS_DATA
-        // dataState stays HAS_DATA
+        // Scenario: has cache with active packages, network fails → keep HAS_DATA
+        var dataState = DataState.HAS_DATA // Cache had active packages
 
         val shouldAutoOpen = dataState == DataState.NO_DATA
 
         assertEquals(DataState.HAS_DATA, dataState)
-        assertFalse("Should NOT auto-open: has cached packages", shouldAutoOpen)
-    }
-
-    @Test
-    fun autoOpen_cacheEmpty_serverEmpty_setsNoData_opensModal() {
-        // Scenario: cache exists but empty, server also empty → open modal
-        var dataState = DataState.LOADING
-
-        // Cache found but empty
-        val cachedItems = emptyList<ClientPackage>()
-        // Don't set NO_DATA yet — server might have new packages
-
-        // Server responds with empty list
-        val serverResult = emptyList<ClientPackage>()
-        dataState = if (serverResult.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
-
-        val shouldAutoOpen = dataState == DataState.NO_DATA
-
-        assertEquals(DataState.NO_DATA, dataState)
-        assertTrue("Should auto-open: both cache and server confirmed empty", shouldAutoOpen)
-    }
-
-    @Test
-    fun autoOpen_cacheHasData_serverEmpty_keepsHasData_noModal() {
-        // Scenario: cache has packages, server returns empty (packages were deleted server-side)
-        var dataState = DataState.HAS_DATA // Cache had packages
-
-        // Server responds empty — but we had cache data, so keep HAS_DATA
-        // (User should see their cached data, not an empty modal)
-        // Actually: if server returns empty, we should update to reflect reality
-        val serverResult = emptyList<ClientPackage>()
-        dataState = if (serverResult.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
-
-        val shouldAutoOpen = dataState == DataState.NO_DATA
-
-        assertEquals(DataState.NO_DATA, dataState)
-        assertTrue("Should auto-open: server confirmed no packages (cache was stale)", shouldAutoOpen)
-    }
-
-    @Test
-    fun autoOpen_onlyCompletedPackages_setsHasData_noModal() {
-        // Scenario: user has only completed packages → don't open create modal
-        val packages = listOf(
-            createTestPackage(id = "CAV-001", status = PackageStatus.DELIVERED),
-            createTestPackage(id = "CAV-002", status = PackageStatus.CANCELLED)
-        )
-
-        val dataState = if (packages.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
-
-        val shouldAutoOpen = dataState == DataState.NO_DATA
-
-        assertEquals(DataState.HAS_DATA, dataState)
-        assertFalse("Should NOT auto-open: has completed packages", shouldAutoOpen)
+        assertFalse("Should NOT auto-open: has cached active packages", shouldAutoOpen)
     }
 
     // ── DataState transitions ────────────────────────────────────────────
@@ -243,7 +267,8 @@ class OfflineCachePersistenceTest {
         val isNetworkAvailable = true
         if (isNetworkAvailable) {
             val serverResult = emptyList<ClientPackage>()
-            dataState = if (serverResult.isEmpty()) DataState.NO_DATA else DataState.HAS_DATA
+            val hasActive = serverResult.any { it.isActive() }
+            dataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
             isRefreshingPackages = false
         }
 

@@ -77,12 +77,18 @@ object NoticeRepository {
 
     /**
      * Start the notice feed: initial fetch + GraphQL subscription + fallback polling.
-     * Safe to call multiple times — subsequent calls are no-ops.
+     * Safe to call multiple times — subsequent calls will refresh notices.
      */
     fun start(scope: CoroutineScope, context: Context? = null) {
-        if (started) return
-        started = true
         if (context != null) appContext = context
+        if (started) {
+            scope.launch {
+                fetchNotices()
+                fetchUnreadCount()
+            }
+            return
+        }
+        started = true
 
         // Initial fetch
         scope.launch {
@@ -108,6 +114,14 @@ object NoticeRepository {
     }
 
     /**
+     * Restart subscription and polling with fresh client connection.
+     */
+    fun restart(scope: CoroutineScope, context: Context? = null) {
+        stop()
+        start(scope, context)
+    }
+
+    /**
      * Stop subscription, polling, and reset state.
      * Safe to call even if not started.
      */
@@ -117,6 +131,7 @@ object NoticeRepository {
         subscriptionJob = null
         pollJob?.cancel()
         pollJob = null
+        previouslyReadViewerIds.clear()
     }
 
     // ── GraphQL subscription with auto-reconnect ────────────────────────────

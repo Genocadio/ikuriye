@@ -126,17 +126,13 @@ fun ClientHomeScreen(
     LaunchedEffect(Unit) { hasAppeared = true }
 
     val activePackages = packages.filter {
-        (it.status == PackageStatus.PENDING ||
-        it.status == PackageStatus.PICKED_UP ||
-        it.status == PackageStatus.IN_TRANSIT ||
-        it.status == PackageStatus.OUT_FOR_DELIVERY) &&
-        (searchQuery.isBlank() || it.id.contains(searchQuery, ignoreCase = true))
+        it.isActive() && (searchQuery.isBlank() || it.id.contains(searchQuery, ignoreCase = true))
     }
-    // ── Auto-open create package panel ONLY when server/cache definitively confirms zero packages ──
+    // ── Auto-open create package panel ONLY when server/cache definitively confirms zero active packages ──
     // Uses clientDataState to avoid opening on network failure or during loading.
-    // - NO_DATA: server responded with empty list → safe to show create modal
+    // - NO_DATA: server/cache confirmed no active packages → show create modal
     // - UNKNOWN/LOADING: don't open yet (backend unreachable, or still fetching)
-    // - HAS_DATA: packages exist → never open modal
+    // - HAS_DATA: active packages exist → never open modal
     var preventedAutoOpen by remember { mutableStateOf(false) }
     LaunchedEffect(clientDataState) {
         if (clientDataState == com.gocavgo.ikuriye.viewmodel.DataState.NO_DATA && !preventedAutoOpen) {
@@ -146,8 +142,7 @@ fun ClientHomeScreen(
     }
 
     val completedPackages = packages.filter {
-        (it.status == PackageStatus.DELIVERED || it.status == PackageStatus.CANCELLED) &&
-        (searchQuery.isBlank() || it.id.contains(searchQuery, ignoreCase = true))
+        !it.isActive() && (searchQuery.isBlank() || it.id.contains(searchQuery, ignoreCase = true))
     }
 
     var isSearchExpanded by remember { mutableStateOf(false) }
