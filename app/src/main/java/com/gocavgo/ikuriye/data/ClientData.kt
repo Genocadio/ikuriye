@@ -70,6 +70,34 @@ data class ClientPackage(
 fun ClientPackage.isActive(): Boolean =
     status != PackageStatus.DELIVERED && status != PackageStatus.CANCELLED
 
+/**
+ * Returns true if any unread notice in [notices] is about this package.
+ * Matches by resourceId (package UUID) or by trackingCode in the payload.
+ */
+fun ClientPackage.hasUnreadNotices(notices: List<Notice>): Boolean =
+    notices.any { n ->
+        n.viewerReadAt == null &&
+        n.resourceType.equals("PACKAGE", ignoreCase = true) &&
+        (
+            n.resourceId == packageUuid ||
+            n.resourceId == id ||
+            n.payload?.let { payload ->
+                try {
+                    org.json.JSONObject(payload).optString("trackingCode") == id
+                } catch (_: Exception) { false }
+            } == true
+        )
+    }
+
+/**
+ * Sorts a package list so packages with unread notices appear first,
+ * preserving the original order within each group.
+ */
+fun List<ClientPackage>.sortedByUnreadNotices(notices: List<Notice>): List<ClientPackage> {
+    val (withNotices, withoutNotices) = partition { it.hasUnreadNotices(notices) }
+    return withNotices + withoutNotices
+}
+
 
 data class CustodianInfo(
     val id: String,

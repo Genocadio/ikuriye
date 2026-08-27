@@ -128,8 +128,9 @@ fun ClientHomeScreen(
     clientDataState: com.gocavgo.ikuriye.viewmodel.DataState = com.gocavgo.ikuriye.viewmodel.DataState.UNKNOWN,
     onConfirmDeliveryDirect: (ClientPackage) -> Unit = {},
     onNoticesClick: () -> Unit = {},
-    noticeCount: Int = 0
-) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, clientDataState, onConfirmDeliveryDirect = onConfirmDeliveryDirect, onNoticesClick = onNoticesClick, noticeCount = noticeCount)
+    noticeCount: Int = 0,
+    notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
+) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, clientDataState, onConfirmDeliveryDirect = onConfirmDeliveryDirect, onNoticesClick = onNoticesClick, noticeCount = noticeCount, notices = notices)
 
 @Composable
 fun CreatePackageScreen(

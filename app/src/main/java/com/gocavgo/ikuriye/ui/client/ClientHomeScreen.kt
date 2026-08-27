@@ -52,6 +52,8 @@ import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.ClientUser
 import com.gocavgo.ikuriye.data.PackageStatus
 import com.gocavgo.ikuriye.data.isActive
+import com.gocavgo.ikuriye.data.hasUnreadNotices
+import com.gocavgo.ikuriye.data.sortedByUnreadNotices
 import com.gocavgo.ikuriye.ui.common.CachedAvatarImage
 import com.gocavgo.ikuriye.ui.common.ProfileQuickMenu
 import com.gocavgo.ikuriye.ui.common.SettingsMenu
@@ -102,7 +104,8 @@ fun ClientHomeScreen(
     clientDataState: com.gocavgo.ikuriye.viewmodel.DataState = com.gocavgo.ikuriye.viewmodel.DataState.UNKNOWN,
     onConfirmDeliveryDirect: (ClientPackage) -> Unit = {},
     onNoticesClick: () -> Unit = {},
-    noticeCount: Int = 0
+    noticeCount: Int = 0,
+    notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
 ) {
     val colors = LocalDriversColors.current
     var searchQuery by remember { mutableStateOf("") }
@@ -130,7 +133,7 @@ fun ClientHomeScreen(
 
     val activePackages = packages.filter {
         it.isActive() && (searchQuery.isBlank() || it.id.contains(searchQuery, ignoreCase = true))
-    }
+    }.sortedByUnreadNotices(notices)
     // ── Auto-open create package panel ONLY when server/cache definitively confirms zero active packages ──
     // Uses clientDataState to avoid opening on network failure or during loading.
     // - NO_DATA: server/cache confirmed no active packages → show create modal
@@ -252,6 +255,7 @@ fun ClientHomeScreen(
                                     onConfirmTransfer = { transferId -> onConfirmTransfer(pkg.id, transferId) },
                                     onGeneratePickupCode = onGeneratePickupCode,
                                     onConfirmDeliveryDirect = onConfirmDeliveryDirect,
+                                    notices = notices,
                                     modifier = Modifier.animateItem(tween(300))
                                 )
                             }
@@ -633,9 +637,11 @@ private fun PackageCard(
     onConfirmTransfer: (String) -> Unit = {},
     onGeneratePickupCode: (String) -> Unit = {},
     onConfirmDeliveryDirect: (ClientPackage) -> Unit = {},
+    notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val colors = LocalDriversColors.current
+    val isUnread = pkg.hasUnreadNotices(notices)
     val isDelivered = pkg.status == PackageStatus.DELIVERED
     val isCancelled = pkg.status == PackageStatus.CANCELLED
     val isMyPackage = pkg.senderId == clientId
@@ -747,6 +753,22 @@ private fun PackageCard(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Unread notice dot
+                if (isUnread) {
+                    val dotTransition = rememberInfiniteTransition(label = "unread")
+                    val dotAlpha by dotTransition.animateFloat(
+                        initialValue = 0.35f, targetValue = 1f,
+                        animationSpec = infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                        label = "dotAlpha"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(colors.red.copy(alpha = dotAlpha))
+                    )
+                    Spacer(Modifier.width(5.dp))
+                }
                 Text(pkg.id, color = colors.textSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                 if (canGeneratePickupCode) {
                     IconButton(

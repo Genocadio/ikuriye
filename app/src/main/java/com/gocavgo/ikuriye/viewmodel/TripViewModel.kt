@@ -972,6 +972,7 @@ class TripViewModel : ViewModel() {
     fun openPackageDetail(packageId: String) {
         _state.update { it.copy(isPackageDetailSheetOpen = true, selectedDriverPackageId = packageId) }
         refreshSinglePackage(packageId)
+        markNoticesForPackageAsRead(packageId)
     }
 
     fun closePackageDetail() {
@@ -1134,6 +1135,7 @@ class TripViewModel : ViewModel() {
         }
         saveNavigationState()
         refreshSinglePackage(packageId)
+        markNoticesForPackageAsRead(packageId)
     }
 
     fun closeTrackPackage() {
@@ -2352,6 +2354,34 @@ class TripViewModel : ViewModel() {
     }
 
     /**
+     * Marks all unread notices whose [Notice.resourceId] matches [packageIdOrUuid]
+     * (or whose payload trackingCode matches) as read. Called when the user opens
+     * a package detail screen from any path — not just the notices panel.
+     */
+    private fun markNoticesForPackageAsRead(packageIdOrUuid: String) {
+        val currentNotices = _state.value.notices
+        val matching = currentNotices.filter { notice ->
+            notice.viewerReadAt == null &&
+            notice.resourceType.equals("PACKAGE", ignoreCase = true) &&
+            (
+                notice.resourceId == packageIdOrUuid ||
+                // Also match by trackingCode inside the payload
+                notice.payload?.let { payload ->
+                    try {
+                        val json = JSONObject(payload)
+                        json.optString("trackingCode") == packageIdOrUuid
+                    } catch (_: Exception) { false }
+                } == true
+            )
+        }
+        for (notice in matching) {
+            viewModelScope.launch {
+                NoticeRepository.markRead(notice)
+            }
+        }
+    }
+
+    /**
      * Opens a notification: marks it as read (optimistic, local) and, when the
      * notice is about a package, fetches that package fresh from the backend
      * (GraphQL [PackageByIdQuery]) and navigates to its details — the driver
@@ -2359,6 +2389,13 @@ class TripViewModel : ViewModel() {
      */
     fun openNoticeFromNotification(notice: Notice) {
         dismissNotices()
+
+        // Always mark the notice as read first — this includes delivery-initiated
+        // notices whose popup we're about to show. Without this, the badge count
+        // stays inflated because the early-return below skipped markRead.
+        viewModelScope.launch {
+            NoticeRepository.markRead(notice)
+        }
 
         // A delivery-initiated notice carries the one-time code. Tapping it should
         // re-open the delivery-confirmation popup (with the code) instead of just
@@ -2388,11 +2425,6 @@ class TripViewModel : ViewModel() {
                     return
                 }
             }
-        }
-
-        // Mark the notice as read (optimistic local update + Supabase notice_viewer write)
-        viewModelScope.launch {
-            NoticeRepository.markRead(notice)
         }
 
         // Only package notices can navigate to a package detail page

@@ -580,7 +580,8 @@ class MainActivity : ComponentActivity() {
                                         clientDataState = state.clientDataState,
                                         onConfirmDeliveryDirect = vm::openDeliveryConfirmationForPackage,
                                         onNoticesClick = vm::toggleNotices,
-                                        noticeCount = state.noticeCount
+                                        noticeCount = state.noticeCount,
+                                        notices = state.notices
                                     )
                                 }
                             }

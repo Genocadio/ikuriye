@@ -6,7 +6,6 @@ import com.gocavgo.ikuriye.MarkNoticeReadMutation
 import android.content.Context
 import com.gocavgo.ikuriye.NoticeCreatedSubscription
 import com.gocavgo.ikuriye.MyNoticesQuery
-import com.gocavgo.ikuriye.UnreadCountQuery
 import com.gocavgo.ikuriye.network.ApolloClientProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -41,7 +40,7 @@ data class Notice(
  * Manages the notice notification feed.
  *
  * Architecture:
- * 1. Initial fetch via GraphQL (MyNoticesQuery, UnreadCountQuery)
+ * 1. Initial fetch via GraphQL (MyNoticesQuery)
  * 2. Real-time push via GraphQL subscription (NoticeCreatedSubscription) —
  *    replaces Supabase Realtime; no Supabase dependency for notifications.
  * 3. Background polling at 30s intervals as a safety-net fallback.
@@ -63,8 +62,16 @@ object NoticeRepository {
     private val _notices = MutableStateFlow<List<Notice>>(emptyList())
     val notices: StateFlow<List<Notice>> = _notices.asStateFlow()
 
-    private val _unreadCount = MutableStateFlow(0)
-    val unreadCount: StateFlow<Int> = _unreadCount.asStateFlow()
+    /**
+     * Derived from the notices list — always matches the actual notices
+     * displayed in the panel, eliminating the count-vs-list mismatch.
+     */
+    val unreadCount: StateFlow<Int>
+        get() = derivedUnreadCount
+
+    // Derived unread count: computed from the notices list so it never
+    // diverges from the data shown in the panel.
+    private val derivedUnreadCount = MutableStateFlow(0)
 
     private var pollJob: Job? = null
     private var subscriptionJob: Job? = null
@@ -84,7 +91,6 @@ object NoticeRepository {
         if (started) {
             scope.launch {
                 fetchNotices()
-                fetchUnreadCount()
             }
             return
         }
@@ -93,7 +99,6 @@ object NoticeRepository {
         // Initial fetch
         scope.launch {
             fetchNotices()
-            fetchUnreadCount()
         }
 
         // GraphQL subscription — real-time push for new notices.
@@ -103,10 +108,8 @@ object NoticeRepository {
 
         // Background polling — safety-net fallback for missed subscription events.
         pollJob = scope.launch {
-            while (isActive) {
-                delay(POLL_INTERVAL_MS)
+            while (isActive) {                    delay(POLL_INTERVAL_MS)
                 fetchNotices()
-                fetchUnreadCount()
             }
         }
 
@@ -144,7 +147,6 @@ object NoticeRepository {
                 if (BuildConfig.DEBUG) Log.d(TAG, "subscription: connecting...")
                 // Immediately catch up on any notices missed while disconnected
                 fetchNotices()
-                fetchUnreadCount()
                 ApolloClientProvider.client
                     .subscription(NoticeCreatedSubscription())
                     .toFlow()
@@ -178,7 +180,7 @@ object NoticeRepository {
                             _notices.update { list ->
                                 (list + notice).sortedBy { it.viewerReadAt != null }
                             }
-                            _unreadCount.value = _unreadCount.value + 1
+                            derivedUnreadCount.value = _notices.value.count { it.viewerReadAt == null }
                             if (BuildConfig.DEBUG) Log.d(TAG, "subscription: new notice ${notice.id} (${notice.eventType})")
                             // Show local Android notification for important events
                             showLocalNotification(notice)
@@ -330,27 +332,16 @@ object NoticeRepository {
             }
             previouslyReadViewerIds.clear()
             _notices.value.forEach { if (it.viewerReadAt != null) previouslyReadViewerIds.add(it.viewerId) }
-            if (BuildConfig.DEBUG) Log.d(TAG, "fetched ${_notices.value.size} notices")
+            // Derive unread count from the list so it never diverges from what
+            // the panel actually shows.
+            derivedUnreadCount.value = _notices.value.count { it.viewerReadAt == null }
+            if (BuildConfig.DEBUG) Log.d(TAG, "fetched ${_notices.value.size} notices, ${derivedUnreadCount.value} unread (derived)")
         } catch (e: Exception) {
             Log.e(TAG, "fetchNotices: ${e.message}", e)
         }
     }
 
-    private suspend fun fetchUnreadCount() {
-        try {
-            val response = ApolloClientProvider.client
-                .query(UnreadCountQuery())
-                .execute()
-            if (response.errors != null && response.errors!!.isNotEmpty()) {
-                Log.e(TAG, "unreadCount: ${response.errors!!.joinToString { it.message ?: "" }}")
-                return
-            }
-            _unreadCount.value = response.data?.unreadNoticeCount ?: 0
-            if (BuildConfig.DEBUG) Log.d(TAG, "unreadCount: ${_unreadCount.value} from server")
-        } catch (e: Exception) {
-            Log.e(TAG, "unreadCount: ${e.message}", e)
-        }
-    }
+
 
     /**
      * Mark a single notice as read — optimistic local update, then persisted
@@ -362,7 +353,7 @@ object NoticeRepository {
         _notices.update { list ->
             applyMarkRead(list, viewerId).sortedBy { it.viewerReadAt != null }
         }
-        _unreadCount.value = (_unreadCount.value - 1).coerceAtLeast(0)
+        derivedUnreadCount.value = _notices.value.count { it.viewerReadAt == null }
 
         try {
             val response = ApolloClientProvider.client
@@ -379,6 +370,7 @@ object NoticeRepository {
                         if (n.viewerId == viewerId) n.copy(viewerReadAt = readAt) else n
                     }.sortedBy { it.viewerReadAt != null }
                 }
+                derivedUnreadCount.value = _notices.value.count { it.viewerReadAt == null }
             }
         } catch (e: Exception) {
             // Persist failed — the optimistic update above stays, so the UI will

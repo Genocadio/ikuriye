@@ -62,6 +62,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.PathEffect
 import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.PackageStatus
+import com.gocavgo.ikuriye.data.hasUnreadNotices
+import com.gocavgo.ikuriye.data.sortedByUnreadNotices
 import com.gocavgo.ikuriye.ui.common.FullScreenMediaViewer
 import com.gocavgo.ikuriye.ui.common.MediaCarousel
 import com.gocavgo.ikuriye.ui.common.adaptiveHorizontalPadding
@@ -87,7 +89,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
         searchQuery.isBlank() || it.id.contains(searchQuery, true) ||
         it.description.contains(searchQuery, true) ||
         it.toAddress.contains(searchQuery, true) || it.fromAddress.contains(searchQuery, true)
-    }
+    }.sortedByUnreadNotices(state.notices)
     val filteredOffers = state.driverAvailableOffers.filter {
         searchQuery.isBlank() || it.id.contains(searchQuery, true) ||
         it.description.contains(searchQuery, true) ||
@@ -275,7 +277,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && pkg.transferStatus != "REQUESTED") { viewModel.startSelectionMode(pkg.id) } })
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && pkg.transferStatus != "REQUESTED") { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -294,7 +296,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && pkg.transferStatus != "REQUESTED") { viewModel.startSelectionMode(pkg.id) } })
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && pkg.transferStatus != "REQUESTED") { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -505,11 +507,13 @@ fun DriverCurrentPackageCard(
     onDeliver: () -> Unit,
     onTransfer: () -> Unit,
     onDetail: () -> Unit,
-    onLongPress: () -> Unit = {}
+    onLongPress: () -> Unit = {},
+    notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
 ) {
     val colors = LocalDriversColors.current
     val isDelivered = pkg.status == PackageStatus.DELIVERED
     val isTransferRequested = pkg.transferStatus == "REQUESTED"
+    val isUnread = pkg.hasUnreadNotices(notices)
     var showMedia by remember { mutableStateOf(false) }
 
     val statusColor = when (pkg.status) {
@@ -538,6 +542,21 @@ fun DriverCurrentPackageCard(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isUnread) {
+                            val dotTransition = rememberInfiniteTransition(label = "unread")
+                            val dotAlpha by dotTransition.animateFloat(
+                                initialValue = 0.35f, targetValue = 1f,
+                                animationSpec = infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                                label = "dotAlpha"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(colors.red.copy(alpha = dotAlpha))
+                            )
+                            Spacer(Modifier.width(5.dp))
+                        }
                         Text(pkg.id, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         if (isTransferRequested) {
                             Spacer(Modifier.width(6.dp))
