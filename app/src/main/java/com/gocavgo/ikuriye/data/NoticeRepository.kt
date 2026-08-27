@@ -142,6 +142,9 @@ object NoticeRepository {
         while (started) {
             try {
                 if (BuildConfig.DEBUG) Log.d(TAG, "subscription: connecting...")
+                // Immediately catch up on any notices missed while disconnected
+                fetchNotices()
+                fetchUnreadCount()
                 ApolloClientProvider.client
                     .subscription(NoticeCreatedSubscription())
                     .toFlow()

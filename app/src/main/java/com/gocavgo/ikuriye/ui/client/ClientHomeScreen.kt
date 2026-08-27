@@ -200,7 +200,8 @@ fun ClientHomeScreen(
                     // Each page gets its own scroll state to prevent cross-tab leaking
                     val pageListState = remember { LazyListState() }
                     val list = if (tab == 0) activePackages else completedPackages
-                    if (isInitialLoading && list.isEmpty()) {
+                    val isStillLoading = (isInitialLoading || !packagesFetchedOnce || clientDataState == com.gocavgo.ikuriye.viewmodel.DataState.LOADING) && list.isEmpty()
+                    if (isStillLoading) {
                         LazyColumn(
                             state = pageListState,
                             modifier = Modifier.fillMaxSize(),

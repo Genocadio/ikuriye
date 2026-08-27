@@ -7,6 +7,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.gocavgo.ikuriye.data.AuthRepository
 import com.gocavgo.ikuriye.data.PackageCache
 import com.gocavgo.ikuriye.data.PackageRepository
 import com.gocavgo.ikuriye.data.PagedResult
@@ -74,13 +75,18 @@ class PackageSyncWorker(
         Log.d(TAG, "Starting background sync...")
 
         return try {
-            // Sync driver packages (cached)
-            syncDriverPackages()
+            val user = AuthRepository.getCachedUser()
+            val role = user?.role
 
-            // Sync client packages (cached)
-            syncClientPackages()
+            when (role) {
+                com.gocavgo.ikuriye.data.dto.RoleDto.DRIVER -> syncDriverPackages()
+                com.gocavgo.ikuriye.data.dto.RoleDto.CUSTOMER -> syncClientPackages()
+                else -> {
+                    Log.d(TAG, "No logged in user or unhandled role: $role, skipping sync")
+                }
+            }
 
-            Log.d(TAG, "Background sync completed successfully")
+            Log.d(TAG, "Background sync completed successfully (role=$role)")
             Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "Background sync failed: ${e.message}", e)

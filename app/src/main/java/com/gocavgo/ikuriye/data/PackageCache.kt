@@ -143,7 +143,9 @@ object PackageCache {
             var found = false
             for (i in 0 until itemsArr.length()) {
                 val item = itemsArr.getJSONObject(i)
-                if (item.optString("id") == updated.id) {
+                val itemId = item.optString("id")
+                val itemUuid = item.optString("packageUuid")
+                if (itemId == updated.id || (updated.packageUuid.isNotBlank() && itemUuid == updated.packageUuid)) {
                     itemsArr.put(i, packageToJson(updated))
                     found = true
                     break

@@ -971,6 +971,7 @@ class TripViewModel : ViewModel() {
 
     fun openPackageDetail(packageId: String) {
         _state.update { it.copy(isPackageDetailSheetOpen = true, selectedDriverPackageId = packageId) }
+        refreshSinglePackage(packageId)
     }
 
     fun closePackageDetail() {
@@ -980,8 +981,8 @@ class TripViewModel : ViewModel() {
     fun getSelectedDriverPackage(): ClientPackage? {
         val s = _state.value
         val id = s.selectedDriverPackageId ?: return null
-        return s.driverCurrentPackages.find { it.id == id }
-            ?: s.driverAvailableOffers.find { it.id == id }
+        return s.driverCurrentPackages.find { it.id == id || it.packageUuid == id }
+            ?: s.driverAvailableOffers.find { it.id == id || it.packageUuid == id }
     }
 
     // ── Client Methods ────────────────────────────────────────────────────────
@@ -1132,6 +1133,7 @@ class TripViewModel : ViewModel() {
             )
         }
         saveNavigationState()
+        refreshSinglePackage(packageId)
     }
 
     fun closeTrackPackage() {
@@ -1256,7 +1258,48 @@ class TripViewModel : ViewModel() {
 
     fun getSelectedPackage(): ClientPackage? {
         val id = _state.value.clientSelectedPackageId ?: return null
-        return _state.value.clientPackages.find { it.id == id }
+        return _state.value.clientPackages.find { it.id == id || it.packageUuid == id }
+    }
+
+    /**
+     * Refreshes a single package fresh from the backend and merges into in-memory state and disk cache.
+     */
+    fun refreshSinglePackage(packageIdOrUuid: String) {
+        if (!AuthRepository.isNetworkAvailable()) return
+        viewModelScope.launch {
+            try {
+                val currentPkg = _state.value.clientPackages.find { it.id == packageIdOrUuid || it.packageUuid == packageIdOrUuid }
+                    ?: _state.value.driverCurrentPackages.find { it.id == packageIdOrUuid || it.packageUuid == packageIdOrUuid }
+                val targetUuid = currentPkg?.packageUuid?.ifBlank { packageIdOrUuid } ?: packageIdOrUuid
+                val freshPkg = PackageRepository.fetchPackageById(targetUuid) ?: return@launch
+                withContext(Dispatchers.IO) {
+                    if (_state.value.appRole == AppRole.CLIENT) {
+                        PackageCache.mergeClientUpdate(freshPkg)
+                    } else {
+                        PackageCache.mergeDriverUpdate(freshPkg)
+                    }
+                }
+                _state.update { s ->
+                    when (s.appRole) {
+                        AppRole.CLIENT -> {
+                            val updated = s.clientPackages.map {
+                                if (it.id == freshPkg.id || it.packageUuid == freshPkg.packageUuid) freshPkg else it
+                            }
+                            s.copy(clientPackages = updated)
+                        }
+                        AppRole.DRIVER -> {
+                            val updated = s.driverCurrentPackages.map {
+                                if (it.id == freshPkg.id || it.packageUuid == freshPkg.packageUuid) freshPkg else it
+                            }
+                            s.copy(driverCurrentPackages = updated)
+                        }
+                        else -> s
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d("TripViewModel", "refreshSinglePackage failed: ${e.message}")
+            }
+        }
     }
 
     fun findPackageByCode(code: String): ClientPackage? {
@@ -1283,16 +1326,25 @@ class TripViewModel : ViewModel() {
                         clientTotalCount = cached.totalCount,
                         clientPackagesFetchedOnce = true,
                         // If cached has active packages, we know data exists; otherwise keep LOADING until backend confirms
-                        clientDataState = if (hasActiveCached) DataState.HAS_DATA else DataState.LOADING
+                        clientDataState = if (hasActiveCached) DataState.HAS_DATA else DataState.LOADING,
+                        isClientInitialLoading = false
                     ) }
-                } else if (cached != null && cached.items.isEmpty()) {
-                    _state.update { it.copy(clientPackagesFetchedOnce = true) }
                 } else {
-                    _state.update { it.copy(isClientInitialLoading = true) }
+                    // Cache is empty or missing — we DON'T know yet if user has packages.
+                    // Keep initial loading active and fetchedOnce false until the 1st network response!
+                    _state.update { it.copy(
+                        isClientInitialLoading = true,
+                        clientPackagesFetchedOnce = false,
+                        clientDataState = DataState.LOADING
+                    ) }
                 }
             } else {
                 // Fresh login: Check backend first, show initial loading
-                _state.update { it.copy(isClientInitialLoading = true) }
+                _state.update { it.copy(
+                    isClientInitialLoading = true,
+                    clientPackagesFetchedOnce = false,
+                    clientDataState = DataState.LOADING
+                ) }
             }
 
             // Always fetch fresh data from backend
@@ -1364,8 +1416,19 @@ class TripViewModel : ViewModel() {
             try {
                 val nextPage = s.clientCurrentPage + 1
                 val result = PackageRepository.fetchMyPackages(page = nextPage, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
+                val combined = s.clientPackages + result.items
+                withContext(Dispatchers.IO) {
+                    PackageCache.saveClient(
+                        PagedResult(
+                            items = combined,
+                            totalCount = result.totalCount,
+                            totalPages = result.totalPages,
+                            currentPage = nextPage
+                        )
+                    )
+                }
                 _state.update { it.copy(
-                    clientPackages = s.clientPackages + result.items,
+                    clientPackages = combined,
                     clientCurrentPage = nextPage,
                     clientHasMore = result.currentPage + 1 < result.totalPages,
                     clientTotalPages = result.totalPages,
@@ -1616,8 +1679,19 @@ class TripViewModel : ViewModel() {
             try {
                 val nextPage = s.driverCurrentPage + 1
                 val result = PackageRepository.fetchMyPackages(page = nextPage, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
+                val combined = s.driverCurrentPackages + result.items
+                withContext(Dispatchers.IO) {
+                    PackageCache.saveDriver(
+                        PagedResult(
+                            items = combined,
+                            totalCount = result.totalCount,
+                            totalPages = result.totalPages,
+                            currentPage = nextPage
+                        )
+                    )
+                }
                 _state.update { it.copy(
-                    driverCurrentPackages = s.driverCurrentPackages + result.items,
+                    driverCurrentPackages = combined,
                     driverCurrentPage = nextPage,
                     driverCurrentHasMore = result.currentPage + 1 < result.totalPages,
                     driverCurrentTotalPages = result.totalPages,
@@ -2355,6 +2429,8 @@ class TripViewModel : ViewModel() {
         }
     }
 
+    private val syncedNoticeIds = mutableSetOf<String>()
+
     /**
      * Start collecting flows from [NoticeRepository] into [TripUiState].
      * Safe to call multiple times — subsequent calls are no-ops because
@@ -2365,29 +2441,151 @@ class TripViewModel : ViewModel() {
             NoticeRepository.notices.collect { notices ->
                 _state.update { state ->
                     var updatedClientPackages = state.clientPackages
-                    val deliveryNotices = notices.filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" }
-                    if (deliveryNotices.isNotEmpty()) {
-                        for (dn in deliveryNotices) {
-                            val payload = dn.payload ?: continue
-                            val code = try { JSONObject(payload).optString("deliveryCode").takeIf { it.isNotBlank() } } catch (_: Exception) { null } ?: continue
-                            val trackingCode = try { JSONObject(payload).optString("trackingCode") } catch (_: Exception) { "" }
-                            updatedClientPackages = updatedClientPackages.map { p ->
-                                if ((p.packageUuid == dn.resourceId || (trackingCode.isNotBlank() && p.trackingCode == trackingCode)) && p.status != PackageStatus.DELIVERED) {
-                                    p.copy(deliveryCode = code, status = PackageStatus.PENDING_CONFIRMATION)
-                                } else {
-                                    p
+                    var updatedDriverPackages = state.driverCurrentPackages
+                    var shouldCloseDeliveryDialog = false
+
+                    for (notice in notices) {
+                        if (notice.resourceType.equals("PACKAGE", ignoreCase = true) || notice.eventType.startsWith("PACKAGE_")) {
+                            val packageUuid = notice.resourceId
+                            val payload = notice.payload
+                            val json = payload?.let { try { JSONObject(it) } catch (_: Exception) { null } }
+                            val trackingCode = json?.optString("trackingCode") ?: ""
+
+                            when (notice.eventType) {
+                                "PACKAGE_DELIVERY_INITIATED" -> {
+                                    val code = json?.optString("deliveryCode")?.takeIf { it.isNotBlank() }
+                                    if (code != null) {
+                                        updatedClientPackages = updatedClientPackages.map { p ->
+                                            if ((p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode)) && p.status != PackageStatus.DELIVERED) {
+                                                p.copy(deliveryCode = code, status = PackageStatus.PENDING_CONFIRMATION)
+                                            } else p
+                                        }
+                                    }
                                 }
+                                "PACKAGE_DELIVERED", "PACKAGE_COMPLETED" -> {
+                                    if (state.showDeliveryConfirmationDialog && (state.deliveryConfirmationPackageUuid == packageUuid || (trackingCode.isNotBlank() && state.deliveryConfirmationTrackingCode == trackingCode))) {
+                                        shouldCloseDeliveryDialog = true
+                                    }
+                                    updatedClientPackages = updatedClientPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.DELIVERED)
+                                        } else p
+                                    }
+                                    updatedDriverPackages = updatedDriverPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.DELIVERED)
+                                        } else p
+                                    }
+                                }
+                                "PACKAGE_CANCELLED" -> {
+                                    updatedClientPackages = updatedClientPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.CANCELLED)
+                                        } else p
+                                    }
+                                    updatedDriverPackages = updatedDriverPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.CANCELLED)
+                                        } else p
+                                    }
+                                }
+                                "PACKAGE_PICKED_UP" -> {
+                                    updatedClientPackages = updatedClientPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.PICKED_UP)
+                                        } else p
+                                    }
+                                    updatedDriverPackages = updatedDriverPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.PICKED_UP)
+                                        } else p
+                                    }
+                                }
+                                "PACKAGE_IN_TRANSIT" -> {
+                                    updatedClientPackages = updatedClientPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.IN_TRANSIT)
+                                        } else p
+                                    }
+                                    updatedDriverPackages = updatedDriverPackages.map { p ->
+                                        if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
+                                            p.copy(status = PackageStatus.IN_TRANSIT)
+                                        } else p
+                                    }
+                                }
+                                else -> {}
                             }
                         }
                     }
-                    state.copy(notices = notices, clientPackages = updatedClientPackages)
+
+                    state.copy(
+                        notices = notices,
+                        clientPackages = updatedClientPackages,
+                        driverCurrentPackages = updatedDriverPackages,
+                        showDeliveryConfirmationDialog = if (shouldCloseDeliveryDialog) false else state.showDeliveryConfirmationDialog
+                    )
                 }
                 maybeShowDeliveryConfirmation(notices)
+                syncLatestPackageFromNotice(notices)
             }
         }
         viewModelScope.launch {
             NoticeRepository.unreadCount.collect { count ->
                 _state.update { it.copy(noticeCount = count) }
+            }
+        }
+    }
+
+    /**
+     * Silently fetches the complete updated package model for new notices in the background
+     * and smart-merges into memory and disk cache.
+     */
+    private fun syncLatestPackageFromNotice(notices: List<Notice>) {
+        val packageNotices = notices.filter {
+            (it.resourceType.equals("PACKAGE", ignoreCase = true) || it.eventType.startsWith("PACKAGE_")) &&
+            it.resourceId.isNotBlank() &&
+            !syncedNoticeIds.contains(it.id)
+        }
+        if (packageNotices.isEmpty()) return
+
+        viewModelScope.launch {
+            for (notice in packageNotices.take(5)) {
+                syncedNoticeIds.add(notice.id)
+                try {
+                    val freshPkg = PackageRepository.fetchPackageById(notice.resourceId) ?: continue
+                    withContext(Dispatchers.IO) {
+                        if (_state.value.appRole == AppRole.CLIENT) {
+                            PackageCache.mergeClientUpdate(freshPkg)
+                        } else {
+                            PackageCache.mergeDriverUpdate(freshPkg)
+                        }
+                    }
+                    _state.update { s ->
+                        when (s.appRole) {
+                            AppRole.CLIENT -> {
+                                val exists = s.clientPackages.any { it.packageUuid == freshPkg.packageUuid || it.id == freshPkg.id }
+                                val updated = if (exists) {
+                                    s.clientPackages.map { if (it.packageUuid == freshPkg.packageUuid || it.id == freshPkg.id) freshPkg else it }
+                                } else {
+                                    listOf(freshPkg) + s.clientPackages
+                                }
+                                s.copy(clientPackages = updated)
+                            }
+                            AppRole.DRIVER -> {
+                                val exists = s.driverCurrentPackages.any { it.packageUuid == freshPkg.packageUuid || it.id == freshPkg.id }
+                                val updated = if (exists) {
+                                    s.driverCurrentPackages.map { if (it.packageUuid == freshPkg.packageUuid || it.id == freshPkg.id) freshPkg else it }
+                                } else {
+                                    listOf(freshPkg) + s.driverCurrentPackages
+                                }
+                                s.copy(driverCurrentPackages = updated)
+                            }
+                            else -> s
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.d("TripViewModel", "syncLatestPackageFromNotice error: ${e.message}")
+                }
             }
         }
     }
