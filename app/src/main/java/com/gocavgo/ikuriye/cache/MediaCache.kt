@@ -300,6 +300,10 @@ class MediaCache private constructor(appContext: Context) {
     }
 
     fun evictExpired() {
+        if (!com.gocavgo.ikuriye.data.AuthRepository.isNetworkAvailable()) {
+            Log.d("MediaCache", "evictExpired skipped: offline / backend unreachable")
+            return
+        }
         synchronized(this) {
             val now = System.currentTimeMillis()
             val toRemove = mutableListOf<String>()

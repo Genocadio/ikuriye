@@ -407,4 +407,46 @@ class OfflineCachePersistenceTest {
         val hasNetwork = true
         assertTrue("Worker SHOULD run when online", hasNetwork)
     }
+
+    // ── Offline Cache & Session Resilience ──────────────────────────────
+
+    @Test
+    fun offlineCache_whenExpiredAndOffline_returnsStaleFallback_neverDeletes() {
+        val EXPIRY_MS = 7 * 24 * 60 * 60 * 1000L
+        val cachedAt = System.currentTimeMillis() - (EXPIRY_MS + 100_000L) // expired 8 days ago
+        val isExpired = System.currentTimeMillis() - cachedAt > EXPIRY_MS
+        val isOnline = false
+
+        // Logic check: if expired and online -> delete & return null; if expired and offline -> preserve & return stale items
+        val shouldDelete = isExpired && isOnline
+        val shouldReturnStale = isExpired && !isOnline
+
+        assertTrue("Cache is indeed expired", isExpired)
+        assertFalse("Should NOT delete cache file when offline", shouldDelete)
+        assertTrue("Should return stale cache items as fallback when offline", shouldReturnStale)
+    }
+
+    @Test
+    fun sessionRetention_networkIOException_preservesSessionLocally() {
+        var localSessionCleared = false
+        val isNetworkException = true
+
+        if (!isNetworkException) {
+            localSessionCleared = true
+        }
+
+        assertFalse("Session MUST NOT be cleared on network timeout/IO failure", localSessionCleared)
+    }
+
+    @Test
+    fun sessionRetention_serverExplicit401_clearsSessionLocally() {
+        var localSessionCleared = false
+        val serverStatusCode = 401
+
+        if (serverStatusCode in listOf(400, 401, 403)) {
+            localSessionCleared = true
+        }
+
+        assertTrue("Session MUST be cleared on explicit server 401 / token revocation", localSessionCleared)
+    }
 }

@@ -70,6 +70,7 @@ object ApolloClientProvider {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
+            .pingInterval(25, TimeUnit.SECONDS)
             .build()
 
         val token = NexxAuth.getAccessToken()
@@ -84,8 +85,10 @@ object ApolloClientProvider {
                 WebSocketNetworkTransport.Builder()
                     .serverUrl(BuildConfig.GRAPHQL_URL)
                     .headers(wsHeaders)
+                    .idleTimeoutMillis(60_000L)
                     .protocol(
                         GraphQLWsProtocol.Factory(
+                            pingIntervalMillis = 25_000L,
                             connectionPayload = {
                                 val currentToken = NexxAuth.getAccessToken()
                                 if (currentToken != null) mapOf("Authorization" to "Bearer $currentToken")
@@ -145,8 +148,10 @@ object ApolloClientProvider {
                             // Step 2: cooldown — don't hammer the refresh endpoint if it just failed
                             val now = System.currentTimeMillis()
                             if (now - lastRefreshFailedAtMs < REFRESH_COOLDOWN_MS) {
-                                Log.w(TAG, "Refresh recently failed (cooldown ${(now - lastRefreshFailedAtMs) / 1000}s ago) — signalling session expiry")
-                                AuthRepository.onSessionExpired()
+                                if (!NexxAuth.hasRefreshToken()) {
+                                    Log.w(TAG, "Refresh recently failed (cooldown ${(now - lastRefreshFailedAtMs) / 1000}s ago) — signalling session expiry")
+                                    AuthRepository.onSessionExpired()
+                                }
                                 return@withLock response
                             }
 
@@ -168,10 +173,14 @@ object ApolloClientProvider {
                                 }
                             }
 
-                            // Step 4: refresh failed — record cooldown and signal logout
+                            // Step 4: refresh failed — record cooldown and signal logout only if token was revoked
                             lastRefreshFailedAtMs = System.currentTimeMillis()
-                            Log.e(TAG, "Token refresh failed — signalling session expiry")
-                            AuthRepository.onSessionExpired()
+                            if (!NexxAuth.hasRefreshToken()) {
+                                Log.e(TAG, "Token refresh failed with auth error — signalling session expiry")
+                                AuthRepository.onSessionExpired()
+                            } else {
+                                Log.w(TAG, "Token refresh failed due to network/server — preserving session for offline use")
+                            }
                         }
                     } else if (BuildConfig.DEBUG && response.statusCode !in 200..299) {
                         Log.e(TAG, "HTTP ${response.statusCode}")

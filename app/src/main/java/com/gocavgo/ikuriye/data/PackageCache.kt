@@ -69,21 +69,29 @@ object PackageCache {
         val dir = cacheDir ?: return null
         val file = File(dir, fileName)
         if (!file.exists()) return null
+        val isOnline = AuthRepository.isNetworkAvailable()
         return try {
             val json = JSONObject(file.readText())
             val cachedAt = json.optLong("cachedAt", 0L)
-            if (System.currentTimeMillis() - cachedAt > EXPIRY_MS) {
-                Log.d(TAG, "Cache expired: $fileName")
-                file.delete()
-                return null
+            val isExpired = System.currentTimeMillis() - cachedAt > EXPIRY_MS
+            if (isExpired) {
+                if (isOnline) {
+                    Log.d(TAG, "Cache expired (online): $fileName — will refresh from backend")
+                    file.delete()
+                    return null
+                } else {
+                    Log.w(TAG, "Cache expired but offline/unreachable: $fileName — preserving stale cache as fallback")
+                }
             }
             val itemsArr = json.getJSONArray("items")
             val items = mutableListOf<ClientPackage>()
             for (i in 0 until itemsArr.length()) {
                 items.add(packageFromJson(itemsArr.getJSONObject(i)))
             }
-            touch(file, json, cachedAt)
-            Log.d(TAG, "Cache hit: ${items.size} packages from $fileName")
+            if (isOnline) {
+                touch(file, json, cachedAt)
+            }
+            Log.d(TAG, "Cache hit: ${items.size} packages from $fileName (expired=$isExpired, online=$isOnline)")
             PagedResult(
                 items = items,
                 totalCount = json.optInt("totalCount", items.size),
@@ -92,7 +100,9 @@ object PackageCache {
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to read cache: $fileName", e)
-            file.delete()
+            if (isOnline) {
+                file.delete()
+            }
             null
         }
     }
@@ -195,6 +205,10 @@ object PackageCache {
     }
 
     private fun evictExpired() {
+        if (!AuthRepository.isNetworkAvailable()) {
+            Log.d(TAG, "evictExpired skipped: offline / backend unreachable")
+            return
+        }
         cacheDir?.listFiles()?.forEach { file ->
             try {
                 val json = JSONObject(file.readText())

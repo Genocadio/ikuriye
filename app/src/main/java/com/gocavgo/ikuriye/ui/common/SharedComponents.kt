@@ -1,13 +1,17 @@
 package com.gocavgo.ikuriye.ui.common
 
+import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -230,6 +234,8 @@ fun DeliveryConfirmationDialog(
     onDismiss: () -> Unit
 ) {
     val colors = LocalDriversColors.current
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -262,20 +268,36 @@ fun DeliveryConfirmationDialog(
                 Spacer(Modifier.height(20.dp))
 
                 Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                        .clickable {
+                            clipboardManager.setText(AnnotatedString(deliveryCode))
+                            Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
+                        },
                     shape = RoundedCornerShape(16.dp),
                     color = colors.green.copy(alpha = 0.06f),
                     border = BorderStroke(1.5.dp, colors.green.copy(alpha = 0.3f))
                 ) {
-                    Text(
-                        deliveryCode,
-                        modifier = Modifier.padding(vertical = 20.dp).fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                        color = colors.green,
-                        fontSize = 36.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 8.sp
-                    )
+                    Column(
+                        modifier = Modifier.padding(vertical = 16.dp).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            deliveryCode,
+                            textAlign = TextAlign.Center,
+                            color = colors.green,
+                            fontSize = 36.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 8.sp
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = colors.green.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Tap to copy", color = colors.green.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
                 }
 
                 Spacer(Modifier.height(16.dp))

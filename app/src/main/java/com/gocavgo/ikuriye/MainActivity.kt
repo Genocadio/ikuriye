@@ -578,6 +578,7 @@ class MainActivity : ComponentActivity() {
                                         hasUnsavedDraft = hasUnsavedDraft,
                                         packagesFetchedOnce = state.clientPackagesFetchedOnce,
                                         clientDataState = state.clientDataState,
+                                        onConfirmDeliveryDirect = vm::openDeliveryConfirmationForPackage,
                                         onNoticesClick = vm::toggleNotices,
                                         noticeCount = state.noticeCount
                                     )
@@ -789,6 +790,11 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         registerLocationReceiver()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        tripViewModel?.onAppForegrounded()
     }
 
     override fun onStop() {

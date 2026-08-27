@@ -1,5 +1,10 @@
 package com.gocavgo.ikuriye.viewmodel
 
+import android.content.Context
+import android.os.Build
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.os.VibrationEffect
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +20,7 @@ import com.gocavgo.ikuriye.data.NoticeRepository
 import com.gocavgo.ikuriye.data.PackageStatus
 import com.gocavgo.ikuriye.data.PagedResult
 import com.gocavgo.ikuriye.data.StatusUpdate
+import com.gocavgo.ikuriye.data.isActive
 import com.gocavgo.ikuriye.data.shouldAutoShowDeliveryConfirmation
 import com.gocavgo.ikuriye.type.CreatePackageInput
 import com.gocavgo.ikuriye.type.DeliveryType
@@ -1308,6 +1314,9 @@ class TripViewModel : ViewModel() {
                 Log.e("TripViewModel", "fetchClientPackages: ${e.message}", e)
                 // Network failed — DON'T set NO_DATA (we don't know)
                 // If cache had active packages, keep HAS_DATA; otherwise stay UNKNOWN
+                if (!AuthRepository.isNetworkAvailable()) {
+                    _toastEvent.emit("No internet connection — showing cached data")
+                }
                 _state.update { it.copy(
                     clientPackagesFetchedOnce = true,
                     clientDataState = if (hasActiveCached) DataState.HAS_DATA else DataState.UNKNOWN
@@ -1551,7 +1560,10 @@ class TripViewModel : ViewModel() {
                 ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadDriverPackages: ${e.message}", e)
-                // Network failed — no cache exists, mark as fetched so UI doesn't show spinner forever
+                if (!AuthRepository.isNetworkAvailable()) {
+                    _toastEvent.emit("No internet connection — showing cached data")
+                }
+                // Network failed — mark as fetched so UI doesn't show spinner forever
                 _state.update { it.copy(isDriverInitialLoading = false) }
             } finally {
                 _state.update { it.copy(isDriverInitialLoading = false) }
@@ -2130,6 +2142,30 @@ class TripViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Opens the delivery confirmation dialog manually for a specific package (e.g. from the Home screen banner).
+     */
+    fun openDeliveryConfirmationForPackage(pkg: ClientPackage) {
+        val notice = _state.value.notices
+            .filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" && (it.resourceId == pkg.packageUuid || it.resourceId == pkg.id) }
+            .maxByOrNull { it.createdAt }
+
+        val codeFromNotice = notice?.payload?.let {
+            try { JSONObject(it).optString("deliveryCode").takeIf { c -> c.isNotBlank() } } catch (_: Exception) { null }
+        }
+        val code = pkg.deliveryCode.ifBlank { codeFromNotice ?: "" }
+
+        _state.update {
+            it.copy(
+                showDeliveryConfirmationDialog = true,
+                deliveryConfirmationPackageUuid = pkg.packageUuid.ifBlank { pkg.id },
+                deliveryConfirmationCode = code,
+                deliveryConfirmationTrackingCode = pkg.trackingCode,
+                deliveryConfirmationRecipientName = pkg.recipientName
+            )
+        }
+    }
+
     // ── Create Package Form Methods ─────────────────────────────────────────
 
     fun resetCreatePackageForm() {
@@ -2327,7 +2363,25 @@ class TripViewModel : ViewModel() {
     private fun collectNotices() {
         viewModelScope.launch {
             NoticeRepository.notices.collect { notices ->
-                _state.update { it.copy(notices = notices) }
+                _state.update { state ->
+                    var updatedClientPackages = state.clientPackages
+                    val deliveryNotices = notices.filter { it.eventType == "PACKAGE_DELIVERY_INITIATED" }
+                    if (deliveryNotices.isNotEmpty()) {
+                        for (dn in deliveryNotices) {
+                            val payload = dn.payload ?: continue
+                            val code = try { JSONObject(payload).optString("deliveryCode").takeIf { it.isNotBlank() } } catch (_: Exception) { null } ?: continue
+                            val trackingCode = try { JSONObject(payload).optString("trackingCode") } catch (_: Exception) { "" }
+                            updatedClientPackages = updatedClientPackages.map { p ->
+                                if ((p.packageUuid == dn.resourceId || (trackingCode.isNotBlank() && p.trackingCode == trackingCode)) && p.status != PackageStatus.DELIVERED) {
+                                    p.copy(deliveryCode = code, status = PackageStatus.PENDING_CONFIRMATION)
+                                } else {
+                                    p
+                                }
+                            }
+                        }
+                    }
+                    state.copy(notices = notices, clientPackages = updatedClientPackages)
+                }
                 maybeShowDeliveryConfirmation(notices)
             }
         }
@@ -2372,6 +2426,7 @@ class TripViewModel : ViewModel() {
 
         autoShownDeliveryNotices.add(notice.viewerNoticeId)
         SettingsRepository.addAutoShownDeliveryNotice(notice.viewerNoticeId)
+        triggerDeliveryAlertHaptic()
         _state.update {
             it.copy(
                 showDeliveryConfirmationDialog = true,
@@ -2380,6 +2435,48 @@ class TripViewModel : ViewModel() {
                 deliveryConfirmationTrackingCode = trackingCode,
                 deliveryConfirmationRecipientName = pkg?.recipientName ?: ""
             )
+        }
+    }
+
+    /**
+     * Trigger a distinct double-pulse haptic vibration to alert the user that a delivery confirmation
+     * code has arrived.
+     */
+    private fun triggerDeliveryAlertHaptic() {
+        try {
+            val ctx = AuthRepository.getAppContext() ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vibratorManager?.defaultVibrator?.vibrate(
+                    VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200), -1)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200), -1))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(longArrayOf(0, 200, 100, 200), -1)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("TripViewModel", "triggerDeliveryAlertHaptic: ${e.message}")
+        }
+    }
+
+    /**
+     * Called when the application returns to the foreground.
+     * Refreshes notices and subscription to pick up any missed events.
+     */
+    fun onAppForegrounded() {
+        if (_state.value.isLoggedIn || _state.value.isClientLoggedIn) {
+            viewModelScope.launch {
+                NoticeRepository.start(this@TripViewModel.viewModelScope, AuthRepository.getAppContext())
+                if (_state.value.isClientLoggedIn) {
+                    refreshClientPackages()
+                }
+            }
         }
     }
 

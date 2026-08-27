@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +51,7 @@ import coil.compose.AsyncImage
 import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.ClientUser
 import com.gocavgo.ikuriye.data.PackageStatus
+import com.gocavgo.ikuriye.data.isActive
 import com.gocavgo.ikuriye.ui.common.CachedAvatarImage
 import com.gocavgo.ikuriye.ui.common.ProfileQuickMenu
 import com.gocavgo.ikuriye.ui.common.SettingsMenu
@@ -98,6 +100,7 @@ fun ClientHomeScreen(
     hasUnsavedDraft: Boolean = false,
     packagesFetchedOnce: Boolean = false,
     clientDataState: com.gocavgo.ikuriye.viewmodel.DataState = com.gocavgo.ikuriye.viewmodel.DataState.UNKNOWN,
+    onConfirmDeliveryDirect: (ClientPackage) -> Unit = {},
     onNoticesClick: () -> Unit = {},
     noticeCount: Int = 0
 ) {
@@ -133,7 +136,7 @@ fun ClientHomeScreen(
     // - NO_DATA: server/cache confirmed no active packages → show create modal
     // - UNKNOWN/LOADING: don't open yet (backend unreachable, or still fetching)
     // - HAS_DATA: active packages exist → never open modal
-    var preventedAutoOpen by remember { mutableStateOf(false) }
+    var preventedAutoOpen by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(clientDataState) {
         if (clientDataState == com.gocavgo.ikuriye.viewmodel.DataState.NO_DATA && !preventedAutoOpen) {
             preventedAutoOpen = true
@@ -247,6 +250,7 @@ fun ClientHomeScreen(
                                     onCreateTransfer = { onCreateTransfer(pkg.id) },
                                     onConfirmTransfer = { transferId -> onConfirmTransfer(pkg.id, transferId) },
                                     onGeneratePickupCode = onGeneratePickupCode,
+                                    onConfirmDeliveryDirect = onConfirmDeliveryDirect,
                                     modifier = Modifier.animateItem(tween(300))
                                 )
                             }
@@ -627,6 +631,7 @@ private fun PackageCard(
     onCreateTransfer: (String) -> Unit = {},
     onConfirmTransfer: (String) -> Unit = {},
     onGeneratePickupCode: (String) -> Unit = {},
+    onConfirmDeliveryDirect: (ClientPackage) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = LocalDriversColors.current
@@ -650,7 +655,7 @@ private fun PackageCard(
     val statusColor = when (pkg.status) {
         PackageStatus.PENDING -> if (isStale) colors.amber.copy(alpha = 0.5f) else colors.amber
         PackageStatus.PICKED_UP, PackageStatus.IN_TRANSIT -> colors.blue
-        PackageStatus.PENDING_CONFIRMATION -> colors.amber
+        PackageStatus.PENDING_CONFIRMATION -> colors.green
         PackageStatus.OUT_FOR_DELIVERY -> colors.green
         PackageStatus.DELIVERED -> colors.blue
         PackageStatus.CANCELLED -> colors.red
@@ -669,9 +674,77 @@ private fun PackageCard(
         modifier = modifier.fillMaxWidth().clickable { onClick() },
         shape = RoundedCornerShape(12.dp),
         color = colors.surface,
-        border = BorderStroke(1.dp, colors.divider)
+        border = BorderStroke(1.dp, if (pkg.status == PackageStatus.PENDING_CONFIRMATION) colors.green.copy(alpha = 0.5f) else colors.divider)
     ) {
         Column(Modifier.padding(12.dp)) {
+            // ── High-visibility pending confirmation banner ──
+            if (pkg.status == PackageStatus.PENDING_CONFIRMATION) {
+                val formattedCode = if (pkg.deliveryCode.length == 6) {
+                    "${pkg.deliveryCode.take(3)} ${pkg.deliveryCode.takeLast(3)}"
+                } else if (pkg.deliveryCode.isNotBlank()) {
+                    pkg.deliveryCode
+                } else {
+                    ""
+                }
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                        .clickable { onConfirmDeliveryDirect(pkg) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = colors.green.copy(alpha = 0.12f),
+                    border = BorderStroke(1.2.dp, colors.green.copy(alpha = 0.4f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(colors.green)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Driver has arrived!",
+                            color = colors.green,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (formattedCode.isNotBlank()) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "Code: ",
+                                color = colors.textSecondary,
+                                fontSize = 11.sp
+                            )
+                            Text(
+                                text = formattedCode,
+                                color = colors.green,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 1.sp
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = colors.green,
+                            modifier = Modifier.clickable { onConfirmDeliveryDirect(pkg) }
+                        ) {
+                            Text(
+                                text = "Tap to Confirm",
+                                color = androidx.compose.ui.graphics.Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(pkg.id, color = colors.textSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                 if (canGeneratePickupCode) {

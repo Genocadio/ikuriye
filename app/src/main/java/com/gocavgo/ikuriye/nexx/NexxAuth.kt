@@ -122,11 +122,31 @@ object NexxAuth {
 
         return try {
             val response = post("$baseUrl/auth/refresh", body, auth = false)
-            handleAuthResponse(response, "refresh") == null
-        } catch (e: Exception) {
-            Log.e(TAG, "refreshSession: failed — ${e.message}")
-            clearSessionLocally()
+            val (statusCode, responseBody) = response
+            if (statusCode in 200..299) {
+                handleAuthResponse(response, "refresh") == null
+            } else if (statusCode == 400 || statusCode == 401 || statusCode == 403) {
+                // Server explicitly rejected the refresh token (revoked or invalid)
+                Log.w(TAG, "refreshSession: server rejected refresh token (HTTP $statusCode) — clearing local session")
+                clearSessionLocally()
+                false
+            } else {
+                // Temporary server error (5xx, 429) — preserve local session
+                Log.w(TAG, "refreshSession: server returned HTTP $statusCode — preserving local session")
+                false
+            }
+        } catch (e: java.io.IOException) {
+            // Network error, connection drop, DNS failure, timeout — DO NOT clear session!
+            Log.w(TAG, "refreshSession: network unreachable/offline — preserving local session: ${e.message}")
             false
+        } catch (e: Exception) {
+            Log.e(TAG, "refreshSession: unexpected error — ${e.message}")
+            if (!com.gocavgo.ikuriye.data.AuthRepository.isNetworkAvailable()) {
+                Log.w(TAG, "refreshSession: device offline — preserving local session")
+                false
+            } else {
+                false
+            }
         }
     }
 
@@ -182,6 +202,8 @@ object NexxAuth {
     fun getAccessToken(): String? = prefs?.getString("access_token", null)?.takeIf { it.isNotBlank() }
 
     private fun getRefreshToken(): String? = prefs?.getString("refresh_token", null)?.takeIf { it.isNotBlank() }
+
+    fun hasRefreshToken(): Boolean = getRefreshToken() != null
 
     fun getCurrentUserId(): String? = prefs?.getString("user_id", null)?.takeIf { it.isNotBlank() }
 
