@@ -2439,6 +2439,9 @@ class TripViewModel : ViewModel() {
     private fun collectNotices() {
         viewModelScope.launch {
             NoticeRepository.notices.collect { notices ->
+                var shouldCloseDriverDeliverDialog = false
+                var driverDeliveredPkgTitle: String? = null
+
                 _state.update { state ->
                     var updatedClientPackages = state.clientPackages
                     var updatedDriverPackages = state.driverCurrentPackages
@@ -2463,9 +2466,25 @@ class TripViewModel : ViewModel() {
                                     }
                                 }
                                 "PACKAGE_DELIVERED", "PACKAGE_COMPLETED" -> {
+                                    // Client side: auto-close client confirmation dialog if open for this package
                                     if (state.showDeliveryConfirmationDialog && (state.deliveryConfirmationPackageUuid == packageUuid || (trackingCode.isNotBlank() && state.deliveryConfirmationTrackingCode == trackingCode))) {
                                         shouldCloseDeliveryDialog = true
                                     }
+
+                                    // Driver side: auto-close driver deliver code entry dialog if customer confirmed directly
+                                    if (state.isDeliverDialogOpen) {
+                                        val selId = state.selectedDriverPackageId
+                                        val isThisPkg = selId != null && (
+                                            selId == packageUuid ||
+                                            selId == trackingCode ||
+                                            state.driverCurrentPackages.any { (it.id == selId || it.packageUuid == selId) && (it.packageUuid == packageUuid || it.id == packageUuid || (trackingCode.isNotBlank() && it.trackingCode == trackingCode)) }
+                                        )
+                                        if (isThisPkg) {
+                                            shouldCloseDriverDeliverDialog = true
+                                            driverDeliveredPkgTitle = trackingCode.ifBlank { selId }
+                                        }
+                                    }
+
                                     updatedClientPackages = updatedClientPackages.map { p ->
                                         if (p.packageUuid == packageUuid || (trackingCode.isNotBlank() && p.trackingCode == trackingCode) || p.id == packageUuid) {
                                             p.copy(status = PackageStatus.DELIVERED)
@@ -2522,8 +2541,16 @@ class TripViewModel : ViewModel() {
                         notices = notices,
                         clientPackages = updatedClientPackages,
                         driverCurrentPackages = updatedDriverPackages,
-                        showDeliveryConfirmationDialog = if (shouldCloseDeliveryDialog) false else state.showDeliveryConfirmationDialog
+                        showDeliveryConfirmationDialog = if (shouldCloseDeliveryDialog) false else state.showDeliveryConfirmationDialog,
+                        isDeliverDialogOpen = if (shouldCloseDriverDeliverDialog) false else state.isDeliverDialogOpen,
+                        selectedDriverPackageId = if (shouldCloseDriverDeliverDialog) null else state.selectedDriverPackageId,
+                        deliverCodeInput = if (shouldCloseDriverDeliverDialog) "" else state.deliverCodeInput,
+                        deliverCodeError = if (shouldCloseDriverDeliverDialog) "" else state.deliverCodeError
                     )
+                }
+                if (shouldCloseDriverDeliverDialog) {
+                    val codeMsg = if (!driverDeliveredPkgTitle.isNullOrBlank()) "Package $driverDeliveredPkgTitle" else "Package"
+                    _toastEvent.emit("$codeMsg delivery confirmed by recipient")
                 }
                 maybeShowDeliveryConfirmation(notices)
                 syncLatestPackageFromNotice(notices)
