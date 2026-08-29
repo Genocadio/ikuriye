@@ -52,6 +52,7 @@ import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.ClientUser
 import com.gocavgo.ikuriye.data.PackageStatus
 import com.gocavgo.ikuriye.data.isActive
+import com.gocavgo.ikuriye.data.hasOpenTransfer
 import com.gocavgo.ikuriye.data.hasUnreadNotices
 import com.gocavgo.ikuriye.data.sortedByUnreadNotices
 import com.gocavgo.ikuriye.ui.common.CachedAvatarImage
@@ -282,11 +283,17 @@ fun ClientHomeScreen(
                         )
                 )
 
-                // ── Search bar (when expanded, below the gradient) ──────────
-                // end = 66.dp reserves ~40dp for the bell button + 8dp gap + 16dp end padding
+                // ── Search bar (when expanded, grows in place from the icon) ──
+                // Shares the FAB's exact top-left anchor (statusBarsPadding + 2dp)
+                // so toggling never makes the field jump vertically.
+                // end = 66.dp reserves ~40dp for the bell button + gap + end padding.
                 AnimatedVisibility(
                     visible = isSearchExpanded,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(start = 16.dp, top = gradientHeightDp + 6.dp, end = 66.dp),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(start = 16.dp, top = 2.dp, end = 66.dp),
                     enter = fadeIn(tween(200)) + expandVertically(tween(200)),
                     exit  = fadeOut(tween(150)) + shrinkVertically(tween(150))
                 ) {
@@ -650,7 +657,7 @@ private fun PackageCard(
     val recipientDisplayPhone = PhoneValidation.toDisplayFormat(pkg.recipientPhone.ifBlank { if (isForMe) clientPhone else "" })
 
     // Check server transfers and custodians for button visibility
-    val hasActiveTransfer = pkg.transfers.any { t -> t.status == "PENDING" || t.status == "REQUESTED" }
+    val hasActiveTransfer = pkg.hasOpenTransfer
     val hasNoCustodians = pkg.custodians.isEmpty()
     val isTransferRequested = pkg.transfers.any { it.status == "REQUESTED" }
     val canCreateTransfer = !isDelivered && !isCancelled && !hasActiveTransfer && hasNoCustodians

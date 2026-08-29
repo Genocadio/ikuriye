@@ -23,7 +23,7 @@ import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.PackageStatus
 import com.gocavgo.ikuriye.ui.common.FullScreenMediaViewer
 import com.gocavgo.ikuriye.ui.common.MediaCarousel
-import com.gocavgo.ikuriye.ui.common.formatTime
+import com.gocavgo.ikuriye.ui.common.SmartTimeText
 import com.gocavgo.ikuriye.ui.common.isWideScreen
 import com.gocavgo.ikuriye.ui.theme.LocalDriversColors
 import com.gocavgo.ikuriye.util.PhoneValidation
@@ -87,7 +87,7 @@ fun PackageDetailSheet(pkg: ClientPackage, onDismiss: () -> Unit) {
 
         if (pkg.createdAt.isNotBlank()) {
             Spacer(Modifier.height(6.dp))
-            DetailRow("Created", formatTime(pkg.createdAt), Icons.Filled.Schedule,
+            DetailTimeRow("Created", pkg.createdAt, Icons.Filled.Schedule,
                 colors.textSecondary)
         }
 
@@ -178,8 +178,14 @@ fun PackageDetailSheet(pkg: ClientPackage, onDismiss: () -> Unit) {
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(update.message, color = colors.textPrimary, fontSize = 12.sp)
-                        Text("${formatTime(update.timestamp)} • ${update.location}",
-                            color = colors.textSecondary, fontSize = 10.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SmartTimeText(update.timestamp,
+                                color = colors.textSecondary, fontSize = 10.sp)
+                            if (update.location.isNotBlank()) {
+                                Text(" • ${update.location}",
+                                    color = colors.textSecondary, fontSize = 10.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -199,6 +205,20 @@ private fun DetailRow(label: String, value: String, icon: ImageVector, iconTint:
         Column {
             Text(label, color = colors.textSecondary, fontSize = 10.sp)
             Text(value, color = colors.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun DetailTimeRow(label: String, iso: String, icon: ImageVector, iconTint: Color) {
+    val colors = LocalDriversColors.current
+    Row(modifier = Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = iconTint, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(label, color = colors.textSecondary, fontSize = 10.sp)
+            SmartTimeText(iso.ifBlank { "N/A" },
+                color = colors.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

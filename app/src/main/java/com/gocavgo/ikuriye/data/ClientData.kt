@@ -71,6 +71,16 @@ fun ClientPackage.isActive(): Boolean =
     status != PackageStatus.DELIVERED && status != PackageStatus.CANCELLED
 
 /**
+ * True while the package has an in-progress (open) transfer — either a
+ * REQUESTED transfer awaiting confirmation or a PENDING transfer already in
+ * motion. While open, no further transfer may be created.
+ */
+val OPEN_TRANSFER_STATUSES = setOf("PENDING", "REQUESTED")
+val ClientPackage.hasOpenTransfer: Boolean
+    get() = transferStatus in OPEN_TRANSFER_STATUSES ||
+        transfers.any { it.status in OPEN_TRANSFER_STATUSES }
+
+/**
  * Returns true if any unread notice in [notices] is about this package.
  * Matches by resourceId (package UUID) or by trackingCode in the payload.
  */

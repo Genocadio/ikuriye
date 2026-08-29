@@ -2,6 +2,7 @@ package com.gocavgo.ikuriye.ui.driver
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -62,6 +63,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.PathEffect
 import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.PackageStatus
+import com.gocavgo.ikuriye.data.hasOpenTransfer
 import com.gocavgo.ikuriye.data.hasUnreadNotices
 import com.gocavgo.ikuriye.data.sortedByUnreadNotices
 import com.gocavgo.ikuriye.ui.common.FullScreenMediaViewer
@@ -177,13 +179,19 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                 }
 
                 // ── Row: search bar (expanded) or sub-tabs + search icon (collapsed) ──
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                // animateContentSize smooths the 42dp→56dp height change when the
+                // bar expands, instead of snapping the row (and the list) down.
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).animateContentSize(tween(220)),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     if (isSearchExpanded) {
-                        // Expanded search bar — constrained by weight so it leaves room for the bell
+                        // Expanded search bar — constrained by weight so it leaves room for the bell.
+                        // No vertical padding: the field's top edge stays aligned with the icon row.
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { viewModel.updateDriverPackageSearch(it) },
-                            modifier = Modifier.weight(1f).padding(vertical = 6.dp),
+                            modifier = Modifier.weight(1f),
                             placeholder = { Text("Search package code...", fontSize = 13.sp) },
                             leadingIcon = { Icon(Icons.Filled.Search, null, tint = colors.textSecondary, modifier = Modifier.size(20.dp)) },
                             trailingIcon = {
@@ -196,6 +204,13 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                             },
                             shape = RoundedCornerShape(12.dp),
                             singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = colors.divider,
+                                focusedBorderColor = colors.blue,
+                                cursorColor = colors.blue,
+                                unfocusedLeadingIconColor = colors.textSecondary,
+                                focusedLeadingIconColor = colors.blue
+                            ),
                             textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
                         )
                         // Reserve space for the floating bell so the search bar doesn't extend behind it
@@ -277,7 +292,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && pkg.transferStatus != "REQUESTED") { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -296,7 +311,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && pkg.transferStatus != "REQUESTED") { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -362,6 +377,10 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
             }
 
             // ── Floating Create Transfer button (selection mode) ─────────────────
+            val allDriverPackages = state.driverCurrentPackages + state.driverAvailableOffers
+            val eligibleSelectedCount = selectedIds.count { id ->
+                allDriverPackages.find { it.id == id }?.hasOpenTransfer != true
+            }
             AnimatedVisibility(
                 visible = isSelection && selectedIds.isNotEmpty(),
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 100.dp),
@@ -375,7 +394,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                     shape = RoundedCornerShape(16.dp),
                     elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
                     icon = { Icon(Icons.AutoMirrored.Filled.CompareArrows, null, modifier = Modifier.size(20.dp)) },
-                    text = { Text("Create Transfer (${selectedIds.size})", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+                    text = { Text("Create Transfer ($eligibleSelectedCount)", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
                 )
             }
         }
@@ -513,6 +532,7 @@ fun DriverCurrentPackageCard(
     val colors = LocalDriversColors.current
     val isDelivered = pkg.status == PackageStatus.DELIVERED
     val isTransferRequested = pkg.transferStatus == "REQUESTED"
+    val isTransferOpen = pkg.hasOpenTransfer
     val isUnread = pkg.hasUnreadNotices(notices)
     var showMedia by remember { mutableStateOf(false) }
 
@@ -558,7 +578,7 @@ fun DriverCurrentPackageCard(
                             Spacer(Modifier.width(5.dp))
                         }
                         Text(pkg.id, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        if (isTransferRequested) {
+                        if (isTransferOpen) {
                             Spacer(Modifier.width(6.dp))
                             Surface(shape = RoundedCornerShape(6.dp), color = colors.blue.copy(alpha = 0.12f)) {
                                 Text("Pending Transfer", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), color = colors.blue, fontSize = 9.sp, fontWeight = FontWeight.Bold)
@@ -582,7 +602,7 @@ fun DriverCurrentPackageCard(
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onDetail, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("Details", color = colors.blue, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
             }
-            if (!isDelivered && !isTransferRequested) {
+            if (!isDelivered && !isTransferOpen) {
                 Spacer(Modifier.height(8.dp))
                 val isPendingConfirmation = pkg.status == PackageStatus.PENDING_CONFIRMATION
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -611,7 +631,7 @@ fun DriverCurrentPackageCard(
                         }
                     }
                 }
-            } else if (isTransferRequested) {
+            } else if (isTransferOpen) {
                 Spacer(Modifier.height(8.dp))
                 Surface(
                     shape = RoundedCornerShape(10.dp),
@@ -621,7 +641,11 @@ fun DriverCurrentPackageCard(
                     Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.HourglassTop, null, tint = colors.blue, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Awaiting owner confirmation — actions disabled while pending", color = colors.blue, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (isTransferRequested) "Awaiting owner confirmation — actions disabled while pending"
+                            else "Transfer in progress — awaiting office pickup",
+                            color = colors.blue, fontSize = 11.sp, fontWeight = FontWeight.Medium
+                        )
                     }
                 }
             }

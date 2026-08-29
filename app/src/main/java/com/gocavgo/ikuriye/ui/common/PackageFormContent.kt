@@ -98,7 +98,8 @@ fun PackageFormContent(
     transferMatchUserId: String? = null,
     transferMatchUserName: String? = null,
     onSelectDriver: (SearchUsersQuery.SearchUser) -> Unit = {},
-    onClearDriver: () -> Unit = {}
+    onClearDriver: () -> Unit = {},
+    showErrors: Boolean = false
 ) {
     val context = LocalContext.current
     val colors  = LocalDriversColors.current
@@ -200,6 +201,15 @@ fun PackageFormContent(
         }
     }
 
+    // ── Camera capture (photo step) ────────────────────────────────────────
+    val onLaunchCamera: () -> Unit = {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            photoLauncher.launch()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
     val allCategories = remember {
         listOf("Electronics", "Clothing", "Food & Perishables", "Documents", "Medical Supplies",
             "Sports Equipment", "Auto Parts", "Books & Stationery", "Fragile Items", "Other")
@@ -287,6 +297,17 @@ fun PackageFormContent(
                         .verticalScroll(scrollState),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    // ── Per-step header (title + hint) ──────────────────────
+                    val stepHeader = when (step) {
+                        0 -> "Pickup & delivery" to "Where is the package going?"
+                        1 -> "Package details" to "What are you sending?"
+                        2 -> "Photos" to "Attach a few photos (optional)"
+                        else -> null
+                    }
+                    if (stepHeader != null) {
+                        StepHeader(title = stepHeader.first, subtitle = stepHeader.second, colors = colors)
+                    }
+
                     when (step) {
                         0 -> LocationStep(
                             formState = formState,
@@ -305,6 +326,7 @@ fun PackageFormContent(
                             onShowToDropdown = { showToDropdown = it; if (it) showFromDropdown = false },
                             locationRevealStage = locationRevealStage,
                             onPickContact = onLaunchContactPicker,
+                            showErrors = showErrors,
                             colors = colors
                         )
                         1 -> DetailsStep(
@@ -315,6 +337,7 @@ fun PackageFormContent(
                             filteredCategories = filteredCategories,
                             onShowCategoryDropdown = { showCategoryDropdown = it },
                             detailsRevealStage = detailsRevealStage,
+                            showErrors = showErrors,
                             colors = colors
                         )
                         2 -> MediaStep(
@@ -323,6 +346,7 @@ fun PackageFormContent(
                             onCancelUpload = onCancelUpload,
                             onRemoveMedia = onRemoveMedia,
                             onGalleryClick = { galleryLauncher.launch("*/*") },
+                            onCameraClick = onLaunchCamera,
                             colors = colors
                         )
                         3 -> SummaryStep(
@@ -480,6 +504,7 @@ private fun LocationStep(
     onShowToDropdown: (Boolean) -> Unit,
     locationRevealStage: Int,
     onPickContact: (String) -> Unit,
+    showErrors: Boolean,
     colors: com.gocavgo.ikuriye.ui.theme.DriversColors
 ) {
     val hasSender = showSenderFields && formState.senderName.isNotBlank()
@@ -520,7 +545,7 @@ private fun LocationStep(
                             colors = colors
                         )
                     } else {
-                        OutlinedTextField(
+                        FormTextField(
                             value = formState.senderName,
                             onValueChange = { v ->
                                 onFormFieldChange("senderName", v)
@@ -528,14 +553,15 @@ private fun LocationStep(
                                 else { onClearUserSearch() }
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Sender name *") },
+                            label = "Sender name *",
+                            leadingIcon = Icons.Filled.Person,
                             trailingIcon = {
                                 IconButton(onClick = { onPickContact("sender") }, modifier = Modifier.size(36.dp)) {
                                     Icon(Icons.Filled.Contacts, "Pick from contacts", tint = colors.blue, modifier = Modifier.size(20.dp))
                                 }
                             },
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp)
+                            colors = colors
                         )
                     }
                     Spacer(Modifier.height(4.dp))
@@ -588,6 +614,8 @@ private fun LocationStep(
         onFocusChange = { if (it) { onShowFromDropdown(true); onShowToDropdown(false) } },
         onSelectOption = { loc -> onFormFieldChange("fromAddress", loc); onShowFromDropdown(false); editingFrom = false },
         onExpand = { editingFrom = true },
+        isError = showErrors && formState.fromAddress.isBlank(),
+        errorText = if (showErrors && formState.fromAddress.isBlank()) "Pickup location is required" else null,
         colors = colors
     )
 
@@ -617,7 +645,7 @@ private fun LocationStep(
                                 colors = colors
                             )
                         } else {
-                            OutlinedTextField(
+                            FormTextField(
                                 value = formState.recipientName,
                                 onValueChange = { v ->
                                     onFormFieldChange("recipientName", v)
@@ -626,14 +654,17 @@ private fun LocationStep(
                                     else { onToggleRecipientSearch(false); onClearUserSearch() }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Recipient name *") },
+                                label = "Recipient name *",
+                                leadingIcon = Icons.Filled.Person,
                                 trailingIcon = {
                                     IconButton(onClick = { onPickContact("recipient") }, modifier = Modifier.size(36.dp)) {
                                         Icon(Icons.Filled.Contacts, "Pick from contacts", tint = colors.blue, modifier = Modifier.size(20.dp))
                                     }
                                 },
                                 singleLine = true,
-                                shape = RoundedCornerShape(12.dp)
+                                isError = showErrors && formState.recipientName.isBlank(),
+                                errorText = if (showErrors && formState.recipientName.isBlank()) "Recipient name is required" else null,
+                                colors = colors
                             )
                             if (showRecipientSearchResults && userSearchResults.isNotEmpty()) {
                                 FormSearchDropdown(userSearchResults) { user ->
@@ -689,6 +720,8 @@ private fun LocationStep(
                 onFocusChange = { if (it) { onShowToDropdown(true); onShowFromDropdown(false) } },
         onSelectOption = { loc -> onFormFieldChange("toAddress", loc); onShowToDropdown(false); editingTo = false },
         onExpand = { editingTo = true },
+        isError = showErrors && formState.toAddress.isBlank(),
+        errorText = if (showErrors && formState.toAddress.isBlank()) "Delivery location is required" else null,
         colors = colors
     )
             // When delivery location gains focus & phone is filled → collapse phone
@@ -712,6 +745,7 @@ private fun DetailsStep(
     filteredCategories: List<String>,
     onShowCategoryDropdown: (Boolean) -> Unit,
     detailsRevealStage: Int,
+    showErrors: Boolean,
     colors: com.gocavgo.ikuriye.ui.theme.DriversColors
 ) {
     var editingCategory by remember { mutableStateOf(formState.category.isBlank()) }
@@ -732,6 +766,8 @@ private fun DetailsStep(
         onFocusChange = { onShowCategoryDropdown(it) },
         onSelectOption = { cat -> onFormFieldChange("category", cat); onShowCategoryDropdown(false); editingCategory = false },
         onExpand = { editingCategory = true },
+        isError = showErrors && formState.category.isBlank(),
+        errorText = if (showErrors && formState.category.isBlank()) "Choose a category" else null,
         colors = colors
     )
 
@@ -743,24 +779,30 @@ private fun DetailsStep(
             Surface(shape = RoundedCornerShape(14.dp), color = colors.surface,
                 border = BorderStroke(1.dp, colors.divider)) {
                 Column(Modifier.padding(12.dp)) {
-                    OutlinedTextField(
+                    FormTextField(
                         value = formState.description,
                         onValueChange = { onFormFieldChange("description", it) },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Description *") },
-                        leadingIcon = { Icon(Icons.Filled.Description, null) },
-                        minLines = 2, maxLines = 3,
-                        shape = RoundedCornerShape(12.dp)
+                        label = "Description *",
+                        leadingIcon = Icons.Filled.Description,
+                        minLines = 2,
+                        maxLines = 3,
+                        isError = showErrors && formState.description.isBlank(),
+                        errorText = if (showErrors && formState.description.isBlank()) "Add a short description" else null,
+                        colors = colors
                     )
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
+                        FormTextField(
                             value = formState.weight,
                             onValueChange = { onFormFieldChange("weight", it) },
                             modifier = Modifier.weight(1f),
-                            label = { Text("Weight (kg) *") },
+                            label = "Weight (kg) *",
+                            leadingIcon = Icons.Filled.MonitorWeight,
                             singleLine = true,
-                            shape = RoundedCornerShape(12.dp)
+                            isError = showErrors && formState.weight.isBlank(),
+                            errorText = if (showErrors && formState.weight.isBlank()) "Weight is required" else null,
+                            colors = colors
                         )
                         Spacer(Modifier.width(12.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -769,7 +811,7 @@ private fun DetailsStep(
                                 onCheckedChange = { onFragileChange(it) },
                                 colors = CheckboxDefaults.colors(checkedColor = colors.red)
                             )
-                            Text("Fragile", color = colors.textSecondary, fontSize = 13.sp)
+                            Text("Fragile", color = colors.textSecondary, fontSize = 14.sp)
                         }
                     }
                 }
@@ -787,6 +829,7 @@ private fun MediaStep(
     onCancelUpload: (String) -> Unit,
     onRemoveMedia: (String) -> Unit,
     onGalleryClick: () -> Unit,
+    onCameraClick: () -> Unit,
     colors: com.gocavgo.ikuriye.ui.theme.DriversColors
 ) {
     FormLabel("Media Attachments")
@@ -801,7 +844,17 @@ private fun MediaStep(
                 ) {
                     Icon(Icons.Filled.AttachFile, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Add from Gallery", fontSize = 12.sp)
+                    Text("Gallery", fontSize = 12.sp)
+                }
+                Button(
+                    onClick = onCameraClick,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.surfaceAlt, contentColor = colors.textPrimary)
+                ) {
+                    Icon(Icons.Filled.PhotoCamera, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Camera", fontSize = 12.sp)
                 }
             }
 
@@ -983,7 +1036,7 @@ private fun SummaryStep(
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("How should drivers receive this package?",
-                        color = colors.textSecondary, fontSize = 11.sp)
+                        color = colors.textSecondary, fontSize = 12.sp)
                     Spacer(Modifier.height(8.dp))
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -996,15 +1049,14 @@ private fun SummaryStep(
                         Spacer(Modifier.height(10.dp))
                         HorizontalDivider(color = colors.divider, thickness = 0.5.dp)
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
+                        FormTextField(
                             value = driverSearchQuery,
                             onValueChange = onDriverSearchQueryChange,
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Assign to driver @username", fontSize = 11.sp) },
-                            leadingIcon = { Icon(Icons.Filled.Person, null, tint = colors.blue) },
+                            label = "Assign to driver @username",
+                            leadingIcon = Icons.Filled.Person,
                             singleLine = true,
-                            shape = RoundedCornerShape(10.dp),
-                            textStyle = MaterialTheme.typography.bodySmall
+                            colors = colors
                         )
                         if (showDriverSearchResults && userSearchResults.isNotEmpty()) {
                             Surface(
@@ -1080,14 +1132,14 @@ private fun SummaryRow(
             Text(
                 label,
                 color = colors.textSecondary.copy(alpha = 0.7f),
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 letterSpacing = 0.3.sp
             )
             Spacer(Modifier.height(1.dp))
             Text(
                 value,
                 color = accent ?: colors.textPrimary,
-                fontSize = 13.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -1114,19 +1166,23 @@ private fun CompactLocationField(
     onFocusChange: (Boolean) -> Unit,
     onSelectOption: (String) -> Unit,
     onExpand: () -> Unit,
+    isError: Boolean = false,
+    errorText: String? = null,
     colors: com.gocavgo.ikuriye.ui.theme.DriversColors
 ) {
     Box {
         if (isEditing || value.isBlank()) {
-            // ── Expanded: full OutlinedTextField ──
-            OutlinedTextField(
+            // ── Expanded: full styled field ──
+            FormTextField(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier.fillMaxWidth().onFocusChanged { onFocusChange(it.isFocused) },
-                label = { Text(placeholder) },
-                leadingIcon = icon,
+                label = placeholder,
+                customLeadingIcon = icon,
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp)
+                isError = isError,
+                errorText = errorText,
+                colors = colors
             )
             if (showDropdown && filteredOptions.isNotEmpty()) {
                 FormLocationDropdown(filteredOptions) { loc ->
@@ -1139,7 +1195,7 @@ private fun CompactLocationField(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 color = colors.surface,
-                border = BorderStroke(1.dp, colors.divider),
+                border = BorderStroke(1.dp, if (isError && value.isBlank()) colors.red else colors.divider),
                 onClick = onExpand
             ) {
                 Row(
@@ -1148,7 +1204,7 @@ private fun CompactLocationField(
                 ) {
                     icon()
                     Spacer(Modifier.width(12.dp))
-                    Text(value, color = colors.textPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Text(value, color = colors.textPrimary, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     Icon(Icons.Filled.Edit, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
                 }
             }
@@ -1178,7 +1234,7 @@ private fun CompactFieldChip(
         ) {
             Icon(icon, null, tint = colors.blue, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(10.dp))
-            Text(label, color = colors.textPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text(label, color = colors.textPrimary, fontSize = 15.sp, modifier = Modifier.weight(1f))
             Icon(Icons.Filled.Edit, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp))
         }
     }
@@ -1217,8 +1273,8 @@ private fun CompactRecipientCard(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(name, color = colors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text(phone, color = colors.textSecondary, fontSize = 12.sp)
+                Text(name, color = colors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text(phone, color = colors.textSecondary, fontSize = 13.sp)
             }
             Icon(Icons.Filled.Edit, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
         }
@@ -1255,6 +1311,90 @@ fun buildPackage(
 
 // ── Shared form helpers ───────────────────────────────────────────────────────
 
+/**
+ * A consistent, themed text field for the create-package form. Outlines are
+ * tuned to the app palette, required labels keep an asterisk, and inline
+ * validation messages render below the field in the error color.
+ */
+@Composable
+private fun FormTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    leadingIcon: ImageVector? = null,
+    iconTint: Color? = null,
+    customLeadingIcon: (@Composable () -> Unit)? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+    isError: Boolean = false,
+    errorText: String? = null,
+    singleLine: Boolean = false,
+    minLines: Int = 1,
+    maxLines: Int = Int.MAX_VALUE,
+    colors: com.gocavgo.ikuriye.ui.theme.DriversColors
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        label = { Text(label, fontSize = 14.sp) },
+        leadingIcon = customLeadingIcon
+            ?: leadingIcon?.let { icon -> { Icon(icon, null, tint = iconTint ?: colors.blue, modifier = Modifier.size(20.dp)) } },
+        trailingIcon = trailingIcon,
+        isError = isError,
+        supportingText = errorText?.let { msg -> { Text(msg, fontWeight = FontWeight.Medium) } },
+        singleLine = singleLine,
+        minLines = minLines,
+        maxLines = maxLines,
+        shape = RoundedCornerShape(14.dp),
+        textStyle = MaterialTheme.typography.bodyLarge,
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = colors.divider,
+            focusedBorderColor = colors.blue,
+            cursorColor = colors.blue,
+            unfocusedLabelColor = colors.textSecondary,
+            focusedLabelColor = colors.blue,
+            focusedLeadingIconColor = colors.blue,
+            unfocusedLeadingIconColor = colors.textSecondary,
+            errorBorderColor = colors.red,
+            errorLabelColor = colors.red,
+            errorCursorColor = colors.red,
+            errorSupportingTextColor = colors.red,
+            errorLeadingIconColor = colors.red
+        )
+    )
+}
+
+/**
+ * A compact section title with a blue→green accent tick, used at the top of
+ * each wizard step.
+ */
+@Composable
+private fun StepHeader(
+    title: String,
+    subtitle: String,
+    colors: com.gocavgo.ikuriye.ui.theme.DriversColors
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(26.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(colors.blue, colors.green)
+                    )
+                )
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(title, color = colors.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text(subtitle, color = colors.textSecondary, fontSize = 12.sp)
+        }
+    }
+}
+
 @Composable
 private fun FormLabel(text: String) {
     val colors = LocalDriversColors.current
@@ -1277,7 +1417,7 @@ private fun FormLabel(text: String) {
         Text(
             text = text.uppercase(),
             color = colors.textSecondary,
-            fontSize = 10.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.8.sp
         )
@@ -1336,11 +1476,11 @@ private fun TransferModeChip(
         modifier = Modifier.clickable { onClick() }
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(label, color = textColor, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
-            Text(description, color = colors.textSecondary.copy(alpha = 0.7f), fontSize = 8.sp, maxLines = 1)
+            Text(label, color = textColor, fontSize = 12.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+            Text(description, color = colors.textSecondary.copy(alpha = 0.7f), fontSize = 10.sp, maxLines = 1)
         }
     }
 }

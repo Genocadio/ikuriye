@@ -60,16 +60,22 @@ object PackageTransferSubscription {
             while (isActive) {
                 try {
                     // 1. Fetch available packages (now includes transfer-targeted packages)
-                    val result = PackageRepository.fetchAvailablePackages(
+                    var newCount = 0
+                    when (val result = PackageRepository.fetchAvailablePackages(
                         page = 0, size = 20,
                         order = com.gocavgo.ikuriye.type.SortOrder.DESC
-                    )
-                    var newCount = 0
-                    for (pkg in result.items) {
-                        if (pkg.id !in seenIds) {
-                            seenIds.add(pkg.id)
-                            _events.emit(pkg)
-                            newCount++
+                    )) {
+                        is FetchPackagesResult.Success -> {
+                            for (pkg in result.page.items) {
+                                if (pkg.id !in seenIds) {
+                                    seenIds.add(pkg.id)
+                                    _events.emit(pkg)
+                                    newCount++
+                                }
+                            }
+                        }
+                        is FetchPackagesResult.Error -> {
+                            Log.w(TAG, "poll fallback fetch failed: ${result.message}")
                         }
                     }
 
@@ -84,11 +90,17 @@ object PackageTransferSubscription {
 
                         for (packageId in missedPackageIds) {
                             try {
-                                val pkg = PackageRepository.fetchPackageById(packageId)
-                                if (pkg != null && pkg.id !in seenIds) {
-                                    seenIds.add(pkg.id)
-                                    _events.emit(pkg)
-                                    newCount++
+                                when (val result = PackageRepository.fetchPackageById(packageId)) {
+                                    is SingleResult.Success -> {
+                                        val pkg = result.data
+                                        if (pkg.id !in seenIds) {
+                                            seenIds.add(pkg.id)
+                                            _events.emit(pkg)
+                                            newCount++
+                                        }
+                                    }
+                                    is SingleResult.NotFound -> { /* package doesn't exist — skip */ }
+                                    is SingleResult.Failure -> { Log.w(TAG, "fetchPackageById failed for $packageId: ${result.message}") }
                                 }
                             } catch (_: Exception) {
                                 // Individual package fetch failed — skip

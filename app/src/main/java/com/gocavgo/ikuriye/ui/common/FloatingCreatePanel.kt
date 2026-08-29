@@ -17,8 +17,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +28,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -79,6 +81,10 @@ fun FloatingCreatePanel(
 
     var currentStep by remember { mutableIntStateOf(0) }
     var maxReachedStep by remember { mutableIntStateOf(0) }
+    // Steps the user already tried to advance past while it was invalid — marks
+    // the specific empty required fields with inline "required" error messages.
+    var attemptedSteps by remember { mutableStateOf(setOf<Int>()) }
+    val showErrors = currentStep in attemptedSteps
     var showDiscardDialog by remember { mutableStateOf(false) }
     // ── Transfer options (managed here so buildPackage sees them on submit) ──
     var selectedTransferRuleType by remember { mutableStateOf<String?>("AUTO") }
@@ -225,16 +231,16 @@ fun FloatingCreatePanel(
                                 Surface(
                                     shape = CircleShape,
                                     color = colors.surfaceAlt,
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(32.dp)
                                 ) {
                                     IconButton(
                                         onClick = { handleDismissRequest() },
-                                        modifier = Modifier.size(28.dp)
+                                        modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(
                                             Icons.Filled.Close, null,
                                             tint = colors.textSecondary,
-                                            modifier = Modifier.size(16.dp)
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                 }
@@ -253,12 +259,21 @@ fun FloatingCreatePanel(
                                 )
                             }
 
-                            // Next / Send (right) — solid filled pill button with pulse
-                            if (stepIsValid) {
-                                val btnColor = if (isLastStep) colors.green else colors.blue
-                                Surface(
-                                    onClick = {
-                                        if (!isSubmitting) {
+                            // Next / Send (right) — solid filled pill button with pulse.
+                            // Always visible: when the step is invalid, tapping it
+                            // surfaces the inline "required" errors instead of advancing.
+                            val haptic = LocalHapticFeedback.current
+                            val btnColor = when {
+                                isSubmitting -> colors.surfaceAlt
+                                isLastStep -> if (stepIsValid) colors.green else colors.surfaceAlt
+                                else -> if (stepIsValid) colors.blue else colors.surfaceAlt
+                            }
+                            val btnContentColor = if (stepIsValid && !isSubmitting) Color.White else colors.textSecondary
+                            Surface(
+                                onClick = {
+                                    if (!isSubmitting) {
+                                        if (stepIsValid) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             if (isLastStep) {
                                                 onSubmit(buildPackage(
                                                     formState,
@@ -271,59 +286,59 @@ fun FloatingCreatePanel(
                                                 currentStep++
                                                 if (currentStep > maxReachedStep) maxReachedStep = currentStep
                                             }
-                                        }
-                                    },
-                                    shape = RoundedCornerShape(50),
-                                    color = btnColor,
-                                    shadowElevation = if (nextIconPulse) 8.dp else 3.dp,
-                                    modifier = Modifier
-                                        .graphicsLayer {
-                                            scaleX = pulseScale
-                                            scaleY = pulseScale
-                                        }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        if (isLastStep) {
-                                            if (isSubmitting) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(14.dp),
-                                                    strokeWidth = 2.dp,
-                                                    color = Color.White
-                                                )
-                                            } else {
-                                                Icon(
-                                                    Icons.AutoMirrored.Filled.Send, null,
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                                Text(
-                                                    "Send",
-                                                    color = Color.White,
-                                                    fontSize = 13.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
                                         } else {
-                                            Text(
-                                                "Next",
-                                                color = Color.White,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Icon(
-                                                Icons.Filled.ChevronRight, null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            attemptedSteps = attemptedSteps + currentStep
                                         }
                                     }
+                                },
+                                shape = RoundedCornerShape(50),
+                                color = btnColor,
+                                shadowElevation = if (nextIconPulse && stepIsValid) 8.dp else 3.dp,
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        scaleX = pulseScale
+                                        scaleY = pulseScale
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    if (isLastStep) {
+                                        if (isSubmitting) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                                color = Color.White
+                                            )
+                                        } else {
+                                            Icon(
+                                                Icons.AutoMirrored.Filled.Send, null,
+                                                tint = btnContentColor,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                "Send",
+                                                color = btnContentColor,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            "Next",
+                                            color = btnContentColor,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.ArrowForward, null,
+                                            tint = btnContentColor,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
-                            } else {
-                                Spacer(Modifier.width(28.dp))
                             }
                         }
 
@@ -377,7 +392,8 @@ fun FloatingCreatePanel(
                                     transferMatchUserId = null
                                     transferMatchUserName = null
                                     driverSearchQuery = ""
-                                }
+                                },
+                                showErrors = showErrors
                             )
                         }
 

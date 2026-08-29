@@ -24,12 +24,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.gocavgo.ikuriye.BuildConfig
 import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.PackageStatus
+import com.gocavgo.ikuriye.data.hasOpenTransfer
 import com.gocavgo.ikuriye.ui.common.FullScreenMediaViewer
 import com.gocavgo.ikuriye.ui.common.MediaCarousel
 import com.gocavgo.ikuriye.ui.common.contentMaxWidth
-import com.gocavgo.ikuriye.ui.common.formatTime
+import com.gocavgo.ikuriye.ui.common.SmartTimeText
 import com.gocavgo.ikuriye.ui.theme.LocalDriversColors
 import com.gocavgo.ikuriye.util.PhoneValidation
 
@@ -223,7 +225,7 @@ private fun DeliveredPackageSummary(pkg: ClientPackage, currentUserId: String = 
                                 Spacer(Modifier.width(12.dp))
                                 Column {
                                     Text(log.message, color = colors.textPrimary, fontSize = 13.sp)
-                                    Text(formatTime(log.timestamp), color = colors.textSecondary, fontSize = 11.sp)
+                                    SmartTimeText(log.timestamp, color = colors.textSecondary, fontSize = 11.sp)
                                 }
                             }
                             if (i < pkg.statusHistory.size - 1) Spacer(Modifier.height(8.dp))
@@ -235,7 +237,7 @@ private fun DeliveredPackageSummary(pkg: ClientPackage, currentUserId: String = 
 
         CustodiansSection(pkg = pkg, colors = colors)
 
-        Log.d("PackageMedia", "DeliveredPackageSummary mediaUrls=${pkg.mediaUrls}")
+        if (BuildConfig.DEBUG) Log.d("TrackPackage", "DeliveredPackageSummary mediaUrls=${pkg.mediaUrls}")
         if (pkg.mediaUrls.isNotEmpty()) {
             item { SectionLabel("Media"); MediaCarouselWithFullscreen(mediaUrls = pkg.mediaUrls) }
         }
@@ -244,9 +246,9 @@ private fun DeliveredPackageSummary(pkg: ClientPackage, currentUserId: String = 
             SectionLabel("Details")
             Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, border = BorderStroke(1.dp, colors.divider)) {
                 Column(Modifier.padding(14.dp)) {
-                    InfoRow("Sent", pkg.createdAt)
+                    InfoTimeRow("Sent", pkg.createdAt)
                     HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 8.dp))
-                    InfoRow("Received", pkg.receivedAt.ifBlank { "N/A" })
+                    InfoTimeRow("Received", pkg.receivedAt)
                     HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                     InfoRow("Description", pkg.description)
                     if (pkg.weight.isNotBlank()) { HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 8.dp)); InfoRow("Weight", pkg.weight) }
@@ -304,10 +306,10 @@ private fun CancelledPackageSummary(pkg: ClientPackage) {
             SectionLabel("Details")
             Surface(shape = RoundedCornerShape(14.dp), color = colors.surface, border = BorderStroke(1.dp, colors.divider)) {
                 Column(Modifier.padding(14.dp)) {
-                    InfoRow("Sent", pkg.createdAt)
+                    InfoTimeRow("Sent", pkg.createdAt)
                     HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                     val cancelledAt = pkg.statusHistory.lastOrNull { it.status == PackageStatus.CANCELLED }?.timestamp ?: "N/A"
-                    InfoRow("Cancelled", cancelledAt)
+                    InfoTimeRow("Cancelled", cancelledAt)
                     HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 8.dp))
                     InfoRow("Description", pkg.description)
                 }
@@ -344,7 +346,7 @@ private fun ActivePackageTracking(
 ) {
     val colors = LocalDriversColors.current
     
-    val hasActiveTransfer = pkg.transfers.any { t -> t.status == "PENDING" || t.status == "REQUESTED" }
+    val hasActiveTransfer = pkg.hasOpenTransfer
     val hasNoCustodians = pkg.custodians.isEmpty()
     val isTransferRequested = pkg.transfers.any { it.status == "REQUESTED" }
     val isDelivered = pkg.status == PackageStatus.DELIVERED
@@ -447,7 +449,7 @@ private fun ActivePackageTracking(
                                 Spacer(Modifier.width(12.dp))
                                 Column {
                                     Text(log.message, color = colors.textPrimary, fontSize = 13.sp)
-                                    Text(formatTime(log.timestamp), color = colors.textSecondary, fontSize = 11.sp)
+                                    SmartTimeText(log.timestamp, color = colors.textSecondary, fontSize = 11.sp)
                                 }
                             }
                             if (i < pkg.statusHistory.size - 1) Spacer(Modifier.height(8.dp))
@@ -459,7 +461,7 @@ private fun ActivePackageTracking(
 
         CustodiansSection(pkg = pkg, colors = colors)
 
-        Log.d("PackageMedia", "ActivePackageTracking mediaUrls=${pkg.mediaUrls}")
+        if (BuildConfig.DEBUG) Log.d("TrackPackage", "ActivePackageTracking mediaUrls=${pkg.mediaUrls}")
         if (pkg.mediaUrls.isNotEmpty()) {
             item { SectionLabel("Media"); MediaCarouselWithFullscreen(mediaUrls = pkg.mediaUrls) }
         }
@@ -652,6 +654,20 @@ private fun InfoRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = colors.textSecondary, fontSize = 13.sp)
         Text(value, color = colors.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun InfoTimeRow(label: String, iso: String) {
+    val colors = LocalDriversColors.current
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = colors.textSecondary, fontSize = 13.sp)
+        SmartTimeText(
+            iso = iso.ifBlank { "N/A" },
+            color = colors.textPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 

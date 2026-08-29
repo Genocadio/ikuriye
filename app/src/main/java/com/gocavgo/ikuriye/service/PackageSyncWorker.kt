@@ -78,16 +78,25 @@ class PackageSyncWorker(
             val user = AuthRepository.getCachedUser()
             val role = user?.role
 
-            when (role) {
+            val synced = when (role) {
                 com.gocavgo.ikuriye.data.dto.RoleDto.DRIVER -> syncDriverPackages()
                 com.gocavgo.ikuriye.data.dto.RoleDto.CUSTOMER -> syncClientPackages()
                 else -> {
                     Log.d(TAG, "No logged in user or unhandled role: $role, skipping sync")
+                    true
                 }
             }
 
-            Log.d(TAG, "Background sync completed successfully (role=$role)")
-            Result.success()
+            if (synced) {
+                Log.d(TAG, "Background sync completed successfully (role=$role)")
+                Result.success()
+            } else if (runAttemptCount < 3) {
+                Log.w(TAG, "Background sync failed to fetch — will retry")
+                Result.retry()
+            } else {
+                Log.e(TAG, "Background sync failed after ${runAttemptCount} attempts")
+                Result.failure()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Background sync failed: ${e.message}", e)
             if (runAttemptCount < 3) {
@@ -98,33 +107,53 @@ class PackageSyncWorker(
         }
     }
 
-    private suspend fun syncDriverPackages() {
-        try {
-            val result = PackageRepository.fetchMyPackages(
+    private suspend fun syncDriverPackages(): Boolean {
+        return try {
+            when (val result = PackageRepository.fetchMyPackages(
                 page = 0,
                 order = com.gocavgo.ikuriye.type.SortOrder.DESC
-            )
-            withContext(Dispatchers.IO) {
-                PackageCache.saveDriver(result)
+            )) {
+                is com.gocavgo.ikuriye.data.FetchPackagesResult.Success -> {
+                    withContext(Dispatchers.IO) {
+                        PackageCache.saveDriver(result.page)
+                    }
+                    Log.d(TAG, "Driver packages synced: ${result.page.items.size} items")
+                    true
+                }
+                is com.gocavgo.ikuriye.data.FetchPackagesResult.Error -> {
+                    // Never overwrite a good cache with an error/empty result.
+                    Log.e(TAG, "Failed to sync driver packages: ${result.message}")
+                    false
+                }
             }
-            Log.d(TAG, "Driver packages synced: ${result.items.size} items")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to sync driver packages: ${e.message}")
+            false
         }
     }
 
-    private suspend fun syncClientPackages() {
-        try {
-            val result = PackageRepository.fetchMyPackages(
+    private suspend fun syncClientPackages(): Boolean {
+        return try {
+            when (val result = PackageRepository.fetchMyPackages(
                 page = 0,
                 order = com.gocavgo.ikuriye.type.SortOrder.DESC
-            )
-            withContext(Dispatchers.IO) {
-                PackageCache.saveClient(result)
+            )) {
+                is com.gocavgo.ikuriye.data.FetchPackagesResult.Success -> {
+                    withContext(Dispatchers.IO) {
+                        PackageCache.saveClient(result.page)
+                    }
+                    Log.d(TAG, "Client packages synced: ${result.page.items.size} items")
+                    true
+                }
+                is com.gocavgo.ikuriye.data.FetchPackagesResult.Error -> {
+                    // Never overwrite a good cache with an error/empty result.
+                    Log.e(TAG, "Failed to sync client packages: ${result.message}")
+                    false
+                }
             }
-            Log.d(TAG, "Client packages synced: ${result.items.size} items")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to sync client packages: ${e.message}")
+            false
         }
     }
 }

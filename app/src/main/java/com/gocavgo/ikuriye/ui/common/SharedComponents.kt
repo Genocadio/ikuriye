@@ -33,10 +33,12 @@ import coil.compose.AsyncImage
 import com.gocavgo.ikuriye.data.AvatarCache
 import com.gocavgo.ikuriye.ui.theme.LocalDriversColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Formats an ISO-8601 timestamp to a human-readable relative string.
- * e.g. "3h ago", "2d ago", "Jan 05"
+ * e.g. "Just now", "25m ago", "1hr ago", "yesterday", "3 days ago",
+ * "1 week ago", "last month".
  */
 fun formatTime(iso: String): String {
     if (iso.isBlank() || iso == "Just now") return iso
@@ -44,18 +46,72 @@ fun formatTime(iso: String): String {
         val instant = java.time.Instant.parse(iso)
         val now     = java.time.Instant.now()
         val dur     = java.time.Duration.between(instant, now)
+        val days    = dur.toDays()
         when {
             dur.isNegative       -> "Just now"
             dur.toMinutes() < 1  -> "Just now"
             dur.toMinutes() < 60 -> "${dur.toMinutes()}m ago"
-            dur.toHours()   < 24 -> "${dur.toHours()}h ago"
-            dur.toDays()    < 7  -> "${dur.toDays()}d ago"
+            dur.toHours()   < 24 -> if (dur.toHours() == 1L) "1hr ago" else "${dur.toHours()}hr ago"
+            days == 1L           -> "yesterday"
+            days < 7             -> "$days days ago"
+            days < 14            -> "1 week ago"
+            days < 30            -> "${days / 7} weeks ago"
+            days < 365           -> if (days / 30 == 1L) "last month" else "${days / 30} months ago"
             else -> {
                 val local = instant.atZone(java.time.ZoneId.systemDefault())
-                java.time.format.DateTimeFormatter.ofPattern("MMM dd").format(local)
+                java.time.format.DateTimeFormatter.ofPattern("MMM yyyy").format(local)
             }
         }
     } catch (_: Exception) { iso }
+}
+
+/**
+ * Formats an ISO-8601 timestamp as an absolute, localized date+time.
+ * e.g. "20 Aug 2026, 10:45 AM". Never ends in "Z".
+ */
+fun formatDateTime(iso: String): String {
+    if (iso.isBlank() || iso == "Just now") return iso
+    return try {
+        val local = java.time.Instant.parse(iso).atZone(java.time.ZoneId.systemDefault())
+        java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a").format(local)
+    } catch (_: Exception) { iso }
+}
+
+/**
+ * Time text that shows a relative time (e.g. "3 days ago") and, when tapped,
+ * reveals the exact absolute time (e.g. "20 Aug 2026, 10:45 AM") for 2 seconds
+ * before reverting to the relative form.
+ */
+@Composable
+fun SmartTimeText(
+    iso: String,
+    color: Color = Color.Unspecified,
+    fontSize: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified,
+    fontWeight: FontWeight? = null,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    var showAbsolute by remember(iso) { mutableStateOf(false) }
+    var revealJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val text = if (showAbsolute) formatDateTime(iso) else formatTime(iso)
+
+    Text(
+        text = text,
+        color = color,
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        maxLines = 1,
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable {
+                revealJob?.cancel()
+                showAbsolute = true
+                revealJob = scope.launch {
+                    delay(2000)
+                    showAbsolute = false
+                }
+            }
+    )
 }
 
 /**

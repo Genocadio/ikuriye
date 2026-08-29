@@ -15,12 +15,15 @@ import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.ClientUser
 import com.gocavgo.ikuriye.data.PackageCache
 import com.gocavgo.ikuriye.data.PackageRepository
+import com.gocavgo.ikuriye.data.FetchPackagesResult
+import com.gocavgo.ikuriye.data.SingleResult
 import com.gocavgo.ikuriye.data.Notice
 import com.gocavgo.ikuriye.data.NoticeRepository
 import com.gocavgo.ikuriye.data.PackageStatus
 import com.gocavgo.ikuriye.data.PagedResult
 import com.gocavgo.ikuriye.data.StatusUpdate
 import com.gocavgo.ikuriye.data.isActive
+import com.gocavgo.ikuriye.data.hasOpenTransfer
 import com.gocavgo.ikuriye.data.shouldAutoShowDeliveryConfirmation
 import com.gocavgo.ikuriye.type.CreatePackageInput
 import com.gocavgo.ikuriye.type.DeliveryType
@@ -52,6 +55,10 @@ import org.json.JSONObject
 
 class TripViewModel : ViewModel() {
 
+    private companion object {
+        private const val TAG = "TripViewModel"
+    }
+
     private val _state = MutableStateFlow(TripUiState())
     val state: StateFlow<TripUiState> = _state.asStateFlow()
 
@@ -60,6 +67,16 @@ class TripViewModel : ViewModel() {
 
     // ── New package subscription (driver-side real-time) ────────────────────
     private var subscriptionJob: kotlinx.coroutines.Job? = null
+
+    // Invalidates in-flight data loads whenever the session/role changes so a
+    // slow fetch that completes AFTER logout cannot repopulate the logged-out UI.
+    // Using StateFlow for atomic reads/writes across coroutine contexts.
+    private val _sessionGeneration = MutableStateFlow(0L)
+    private val sessionGeneration: Long get() = _sessionGeneration.value
+
+    private fun bumpSessionGeneration() {
+        _sessionGeneration.update { it + 1 }
+    }
 
     // Notice IDs whose delivery-confirmation popup was already shown once.
     // Seeded from SharedPreferences so a popup that was confirmed or dismissed
@@ -461,6 +478,7 @@ class TripViewModel : ViewModel() {
     }
 
     fun logout() {
+        bumpSessionGeneration()
         NoticeRepository.stop()
         stopPackageSubscription()
         autoShownDeliveryNotices.clear()
@@ -921,6 +939,11 @@ class TripViewModel : ViewModel() {
     }
 
     fun openTransferDialog(packageId: String) {
+        val existing = _state.value.driverCurrentPackages.find { it.id == packageId }
+        if (existing?.hasOpenTransfer == true) {
+            viewModelScope.launch { _toastEvent.emit("This package already has an open transfer") }
+            return
+        }
         _state.update { it.copy(isTransferDialogOpen = true, selectedDriverPackageId = packageId) }
     }
 
@@ -935,6 +958,12 @@ class TripViewModel : ViewModel() {
             viewModelScope.launch { _toastEvent.emit("Missing package UUID — cannot create transfer") }
             return
         }
+        // Never create a transfer on top of an already-open transfer.
+        if (pkg.hasOpenTransfer) {
+            _state.update { it.copy(isTransferDialogOpen = false, selectedDriverPackageId = null) }
+            viewModelScope.launch { _toastEvent.emit("This package already has an open transfer") }
+            return
+        }
 
         // Initiate an AUTO transfer to the office — only workers can accept.
         viewModelScope.launch {
@@ -944,20 +973,23 @@ class TripViewModel : ViewModel() {
                 ruleType = "AUTO"
             )
             if (result != null) {
+                val updated = pkg.copy(
+                    transferId = result.id,
+                    transferStatus = result.status,
+                    statusHistory = pkg.statusHistory + StatusUpdate(
+                        PackageStatus.IN_TRANSIT, "Just now", pkg.toAddress,
+                        "Transfer initiated — awaiting office pickup"
+                    )
+                )
+                // Persist the open transfer so the UI stays consistent across restarts.
+                withContext(Dispatchers.IO) { PackageCache.mergeDriverUpdate(updated) }
                 _state.update { s2 ->
                     s2.copy(
                         isCreatingTransfer = false,
                         isTransferDialogOpen = false,
                         selectedDriverPackageId = null,
                         driverCurrentPackages = s2.driverCurrentPackages.map {
-                            if (it.id == pkg.id) it.copy(
-                                transferId = result.id,
-                                transferStatus = result.status,
-                                statusHistory = it.statusHistory + StatusUpdate(
-                                    PackageStatus.IN_TRANSIT, "Just now", it.toAddress,
-                                    "Transfer initiated — awaiting office pickup"
-                                )
-                            ) else it
+                            if (it.id == pkg.id) updated else it
                         }
                     )
                 }
@@ -1036,6 +1068,7 @@ class TripViewModel : ViewModel() {
     }
 
     fun goBackToRoleSelect() {
+        bumpSessionGeneration()
         NoticeRepository.stop()
         ApolloClientProvider.resetClient()
         viewModelScope.launch {
@@ -1063,6 +1096,7 @@ class TripViewModel : ViewModel() {
     }
 
     fun clientLogout() {
+        bumpSessionGeneration()
         NoticeRepository.stop()
         autoShownDeliveryNotices.clear()
         ApolloClientProvider.resetClient()
@@ -1149,12 +1183,58 @@ class TripViewModel : ViewModel() {
     }
 
     fun createPackage(pkg: ClientPackage) {
-        Log.d("PackageMedia", "=== CREATE PACKAGE ===")
-        Log.d("PackageMedia", "mediaUrls from ClientPackage: ${pkg.mediaUrls}")
-        Log.d("PackageMedia", "mediaUrls count: ${pkg.mediaUrls.size}")
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "createPackage: mediaUrls=${pkg.mediaUrls}, count=${pkg.mediaUrls.size}")
+        }
 
         viewModelScope.launch {
+            // Double-submit guard: never send the same package twice.
+            if (_state.value.isSubmittingPackage) return@launch
+
+            // Offline guard: keep the draft intact (already persisted as the user
+            // types) and tell the user why the submit did not go through.
+            if (!AuthRepository.isNetworkAvailable()) {
+                _toastEvent.emit("You need an internet connection to create a package — your draft has been saved")
+                return@launch
+            }
+
+            // Wait for any in-flight media uploads before submitting; otherwise
+            // the media can't be attached to the package.
+            if (_state.value.mediaUploads.any { it.isUploading }) {
+                _toastEvent.emit("Media is still uploading — please wait a moment and try again")
+                return@launch
+            }
             _state.update { it.copy(isSubmittingPackage = true) }
+            val gen = sessionGeneration
+
+            // Re-upload any media that failed to upload when it was added (e.g.
+            // added while offline). Only media with a mediaId reaches the server.
+            val failedMedia = _state.value.mediaUploads.filter { it.mediaId == null && it.byteArray != null }
+            for (media in failedMedia) {
+                val uploadResult = com.gocavgo.ikuriye.network.BackendStorage.uploadFile(
+                    byteArray = media.byteArray!!,
+                    mimeType = media.mimeType,
+                    purpose = "package-media"
+                )
+                if (uploadResult == null) {
+                    _toastEvent.emit("Failed to upload attached media — your draft has been saved. Please check your connection and try again.")
+                    _state.update { it.copy(isSubmittingPackage = false) }
+                    return@launch
+                }
+                _state.update { s ->
+                    s.copy(mediaUploads = s.mediaUploads.map { m ->
+                        if (m.id == media.id) m.copy(
+                            mediaId = uploadResult.mediaId,
+                            url = uploadResult.url,
+                            isUploading = false,
+                            progress = 100.0,
+                            error = null
+                        ) else m
+                    })
+                }
+            }
+            if (gen != sessionGeneration) return@launch
+
             val s = _state.value
             val authUser = s.authUser
 
@@ -1209,7 +1289,7 @@ class TripViewModel : ViewModel() {
                         mediaId = upload.mediaId!!
                     )
                 }
-            Log.d("PackageMedia", "MediaInput objects being sent: ${mediaInputs.map { it.mediaId }}")
+            if (BuildConfig.DEBUG) Log.d(TAG, "createPackage: mediaIds=${mediaInputs.map { it.mediaId }}")
 
             val details = DetailInput(
                 category = if (pkg.category.isNotBlank()) Optional.present(pkg.category) else Optional.absent(),
@@ -1237,9 +1317,9 @@ class TripViewModel : ViewModel() {
             )
 
             val result = PackageRepository.createPackage(input)
-            Log.d("PackageMedia", "createPackage result: ${result != null}")
-            Log.d("PackageMedia", "result mediaUrls: ${result?.mediaUrls}")
+            if (BuildConfig.DEBUG) Log.d(TAG, "createPackage: success=${result != null}, mediaUrls=${result?.mediaUrls}")
             if (result != null) {
+                if (gen != sessionGeneration) return@launch
                 _state.update {
                     it.copy(
                         clientPackages = listOf(result) + it.clientPackages,
@@ -1252,8 +1332,10 @@ class TripViewModel : ViewModel() {
                 }
                 SettingsRepository.clearCreatePackageDraft()
             } else {
-                _state.update { it.copy(isSubmittingPackage = false) }
-                _toastEvent.emit("Failed to create package. Please try again.")
+                if (gen == sessionGeneration) {
+                    _state.update { it.copy(isSubmittingPackage = false) }
+                    _toastEvent.emit("Failed to create package. Please try again.")
+                }
             }
         }
     }
@@ -1273,7 +1355,11 @@ class TripViewModel : ViewModel() {
                 val currentPkg = _state.value.clientPackages.find { it.id == packageIdOrUuid || it.packageUuid == packageIdOrUuid }
                     ?: _state.value.driverCurrentPackages.find { it.id == packageIdOrUuid || it.packageUuid == packageIdOrUuid }
                 val targetUuid = currentPkg?.packageUuid?.ifBlank { packageIdOrUuid } ?: packageIdOrUuid
-                val freshPkg = PackageRepository.fetchPackageById(targetUuid) ?: return@launch
+                val freshPkg = when (val result = PackageRepository.fetchPackageById(targetUuid)) {
+                    is SingleResult.Success -> result.data
+                    is SingleResult.NotFound -> { _toastEvent.emit("Package not found"); return@launch }
+                    is SingleResult.Failure -> { _toastEvent.emit("Failed to load package"); return@launch }
+                }
                 withContext(Dispatchers.IO) {
                     if (_state.value.appRole == AppRole.CLIENT) {
                         PackageCache.mergeClientUpdate(freshPkg)
@@ -1312,6 +1398,7 @@ class TripViewModel : ViewModel() {
 
     fun fetchClientPackages(isFreshLogin: Boolean = false) {
         viewModelScope.launch {
+            val gen = sessionGeneration
             _state.update { it.copy(clientCurrentPage = 0, clientDataState = DataState.LOADING) }
 
             var hasActiveCached = false
@@ -1351,32 +1438,48 @@ class TripViewModel : ViewModel() {
 
             // Always fetch fresh data from backend
             try {
-                val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                withContext(Dispatchers.IO) { PackageCache.saveClient(result) }
-                val hasActive = result.items.any { it.isActive() }
-                _state.update { it.copy(
-                    clientPackages = result.items,
-                    clientCurrentPage = 0,
-                    clientHasMore = result.currentPage + 1 < result.totalPages,
-                    clientTotalPages = result.totalPages,
-                    clientTotalCount = result.totalCount,
-                    clientPackagesFetchedOnce = true,
-                    // Definitive: If no active packages exist, set NO_DATA to trigger create modal
-                    clientDataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
-                ) }
+                when (val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        val page = result.page
+                        withContext(Dispatchers.IO) { PackageCache.saveClient(page) }
+                        if (gen != sessionGeneration) return@launch
+                        val hasActive = page.items.any { it.isActive() }
+                        _state.update { it.copy(
+                            clientPackages = page.items,
+                            clientCurrentPage = 0,
+                            clientHasMore = page.currentPage + 1 < page.totalPages,
+                            clientTotalPages = page.totalPages,
+                            clientTotalCount = page.totalCount,
+                            clientPackagesFetchedOnce = true,
+                            // Definitive: If no active packages exist, set NO_DATA to trigger create modal
+                            clientDataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.e("TripViewModel", "fetchClientPackages: server fetch failed — ${result.message}")
+                        if (gen != sessionGeneration) return@launch
+                        // Never overwrite the cache with an error/empty result.
+                        // If cached data exists keep showing it; otherwise UNKNOWN (not NO_DATA).
+                        if (!AuthRepository.isNetworkAvailable()) {
+                            _toastEvent.emit("You need an internet connection — showing saved data")
+                        }
+                        _state.update { it.copy(
+                            clientPackagesFetchedOnce = true,
+                            clientDataState = if (hasActiveCached) DataState.HAS_DATA else DataState.UNKNOWN
+                        ) }
+                    }
+                }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "fetchClientPackages: ${e.message}", e)
-                // Network failed — DON'T set NO_DATA (we don't know)
-                // If cache had active packages, keep HAS_DATA; otherwise stay UNKNOWN
                 if (!AuthRepository.isNetworkAvailable()) {
-                    _toastEvent.emit("No internet connection — showing cached data")
+                    _toastEvent.emit("You need an internet connection — showing saved data")
                 }
                 _state.update { it.copy(
                     clientPackagesFetchedOnce = true,
                     clientDataState = if (hasActiveCached) DataState.HAS_DATA else DataState.UNKNOWN
                 ) }
             } finally {
-                _state.update { it.copy(isClientInitialLoading = false) }
+                if (gen == sessionGeneration) _state.update { it.copy(isClientInitialLoading = false) }
             }
         }
     }
@@ -1384,28 +1487,45 @@ class TripViewModel : ViewModel() {
     fun refreshClientPackages() {
         // Don't clear cache if offline — just show existing data
         if (!AuthRepository.isNetworkAvailable()) {
-            viewModelScope.launch { _toastEvent.emit("No internet — showing cached data") }
+            viewModelScope.launch { _toastEvent.emit("You need an internet connection to refresh — showing saved data") }
             return
         }
         _state.update { it.copy(isRefreshingPackages = true) }
         viewModelScope.launch {
+            val gen = sessionGeneration
             try {
-                val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                withContext(Dispatchers.IO) { PackageCache.saveClient(result) }
-                val hasActive = result.items.any { it.isActive() }
-                _state.update { it.copy(
-                    clientPackages = result.items,
-                    clientCurrentPage = 0,
-                    clientHasMore = result.currentPage + 1 < result.totalPages,
-                    clientTotalPages = result.totalPages,
-                    clientTotalCount = result.totalCount,
-                    clientDataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
-                ) }
+                when (val result = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        val page = result.page
+                        withContext(Dispatchers.IO) { PackageCache.saveClient(page) }
+                        if (gen != sessionGeneration) return@launch
+                        val hasActive = page.items.any { it.isActive() }
+                        _state.update { it.copy(
+                            clientPackages = page.items,
+                            clientCurrentPage = 0,
+                            clientHasMore = page.currentPage + 1 < page.totalPages,
+                            clientTotalPages = page.totalPages,
+                            clientTotalCount = page.totalCount,
+                            clientDataState = if (!hasActive) DataState.NO_DATA else DataState.HAS_DATA
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.e("TripViewModel", "refreshClientPackages: ${result.message}")
+                        if (gen != sessionGeneration) return@launch
+                        // Don't clear existing data on failure — keep showing what we have
+                        if (!AuthRepository.isNetworkAvailable()) {
+                            _toastEvent.emit("You need an internet connection to refresh — showing saved data")
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "refreshClientPackages: ${e.message}", e)
                 // Don't clear existing data on failure — keep showing what we have
+                if (!AuthRepository.isNetworkAvailable()) {
+                    _toastEvent.emit("You need an internet connection to refresh — showing saved data")
+                }
             } finally {
-                _state.update { it.copy(isRefreshingPackages = false) }
+                if (gen == sessionGeneration) _state.update { it.copy(isRefreshingPackages = false) }
             }
         }
     }
@@ -1414,28 +1534,39 @@ class TripViewModel : ViewModel() {
         val s = _state.value
         if (s.isLoadingMorePackages || !s.clientHasMore) return
         viewModelScope.launch {
+            val gen = sessionGeneration
             _state.update { it.copy(isLoadingMorePackages = true) }
             try {
                 val nextPage = s.clientCurrentPage + 1
                 val result = PackageRepository.fetchMyPackages(page = nextPage, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                val combined = s.clientPackages + result.items
-                withContext(Dispatchers.IO) {
-                    PackageCache.saveClient(
-                        PagedResult(
-                            items = combined,
-                            totalCount = result.totalCount,
-                            totalPages = result.totalPages,
-                            currentPage = nextPage
-                        )
-                    )
+                when (result) {
+                    is FetchPackagesResult.Success -> {
+                        val page = result.page
+                        val combined = s.clientPackages + page.items
+                        withContext(Dispatchers.IO) {
+                            PackageCache.saveClient(
+                                PagedResult(
+                                    items = combined,
+                                    totalCount = page.totalCount,
+                                    totalPages = page.totalPages,
+                                    currentPage = nextPage
+                                )
+                            )
+                        }
+                        if (gen != sessionGeneration) return@launch
+                        _state.update { it.copy(
+                            clientPackages = combined,
+                            clientCurrentPage = nextPage,
+                            clientHasMore = page.currentPage + 1 < page.totalPages,
+                            clientTotalPages = page.totalPages,
+                            clientTotalCount = page.totalCount
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.w("TripViewModel", "loadMoreClientPackages: ${result.message}")
+                        if (gen == sessionGeneration) _toastEvent.emit("Couldn't load more packages")
+                    }
                 }
-                _state.update { it.copy(
-                    clientPackages = combined,
-                    clientCurrentPage = nextPage,
-                    clientHasMore = result.currentPage + 1 < result.totalPages,
-                    clientTotalPages = result.totalPages,
-                    clientTotalCount = result.totalCount
-                ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadMoreClientPackages: ${e.message}", e)
             } finally {
@@ -1584,6 +1715,7 @@ class TripViewModel : ViewModel() {
 
     fun loadDriverPackages() {
         viewModelScope.launch {
+            val gen = sessionGeneration
             _state.update { it.copy(
                 driverCurrentPage = 0,
                 driverOffersPage = 0
@@ -1605,33 +1737,51 @@ class TripViewModel : ViewModel() {
             }
             try {
                 // Fetch driver's packages (cached locally)
-                val current = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                withContext(Dispatchers.IO) { PackageCache.saveDriver(current) }
-                _state.update { it.copy(
-                    driverCurrentPackages = current.items,
-                    driverCurrentPage = 0,
-                    driverCurrentHasMore = current.currentPage + 1 < current.totalPages,
-                    driverCurrentTotalPages = current.totalPages,
-                    driverCurrentTotalCount = current.totalCount
-                ) }
+                when (val current = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        withContext(Dispatchers.IO) { PackageCache.saveDriver(current.page) }
+                        if (gen != sessionGeneration) return@launch
+                        _state.update { it.copy(
+                            driverCurrentPackages = current.page.items,
+                            driverCurrentPage = 0,
+                            driverCurrentHasMore = current.page.currentPage + 1 < current.page.totalPages,
+                            driverCurrentTotalPages = current.page.totalPages,
+                            driverCurrentTotalCount = current.page.totalCount
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.w("TripViewModel", "loadDriverPackages current: ${current.message}")
+                        if (!AuthRepository.isNetworkAvailable()) {
+                            _toastEvent.emit("No internet connection — showing cached data")
+                        } else {
+                            _toastEvent.emit("Couldn't refresh packages")
+                        }
+                    }
+                }
                 // Fetch offers (NOT cached — always fresh)
-                val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                _state.update { it.copy(
-                    driverAvailableOffers = offers.items,
-                    driverOffersPage = 0,
-                    driverOffersHasMore = offers.currentPage + 1 < offers.totalPages,
-                    driverOffersTotalPages = offers.totalPages,
-                    driverOffersTotalCount = offers.totalCount
-                ) }
+                when (val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        if (gen != sessionGeneration) return@launch
+                        _state.update { it.copy(
+                            driverAvailableOffers = offers.page.items,
+                            driverOffersPage = 0,
+                            driverOffersHasMore = offers.page.currentPage + 1 < offers.page.totalPages,
+                            driverOffersTotalPages = offers.page.totalPages,
+                            driverOffersTotalCount = offers.page.totalCount
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.w("TripViewModel", "loadDriverPackages offers: ${offers.message}")
+                    }
+                }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadDriverPackages: ${e.message}", e)
                 if (!AuthRepository.isNetworkAvailable()) {
                     _toastEvent.emit("No internet connection — showing cached data")
                 }
                 // Network failed — mark as fetched so UI doesn't show spinner forever
-                _state.update { it.copy(isDriverInitialLoading = false) }
             } finally {
-                _state.update { it.copy(isDriverInitialLoading = false) }
+                if (gen == sessionGeneration) _state.update { it.copy(isDriverInitialLoading = false) }
             }
         }
     }
@@ -1639,36 +1789,55 @@ class TripViewModel : ViewModel() {
     fun refreshDriverPackages() {
         // Don't clear cache if offline — just show existing data
         if (!AuthRepository.isNetworkAvailable()) {
-            viewModelScope.launch { _toastEvent.emit("No internet — showing cached data") }
+            viewModelScope.launch { _toastEvent.emit("You need an internet connection to refresh — showing saved data") }
             return
         }
         _state.update { it.copy(isRefreshingPackages = true) }
         viewModelScope.launch {
+            val gen = sessionGeneration
             try {
                 // Fetch driver's packages (cached locally)
-                val current = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                withContext(Dispatchers.IO) { PackageCache.saveDriver(current) }
-                _state.update { it.copy(
-                    driverCurrentPackages = current.items,
-                    driverCurrentPage = 0,
-                    driverCurrentHasMore = current.currentPage + 1 < current.totalPages,
-                    driverCurrentTotalPages = current.totalPages,
-                    driverCurrentTotalCount = current.totalCount
-                ) }
+                when (val current = PackageRepository.fetchMyPackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        withContext(Dispatchers.IO) { PackageCache.saveDriver(current.page) }
+                        if (gen != sessionGeneration) return@launch
+                        _state.update { it.copy(
+                            driverCurrentPackages = current.page.items,
+                            driverCurrentPage = 0,
+                            driverCurrentHasMore = current.page.currentPage + 1 < current.page.totalPages,
+                            driverCurrentTotalPages = current.page.totalPages,
+                            driverCurrentTotalCount = current.page.totalCount
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.w("TripViewModel", "refreshDriverPackages current: ${current.message}")
+                        if (gen == sessionGeneration) _toastEvent.emit("Couldn't refresh packages")
+                    }
+                }
                 // Fetch offers (NOT cached — always fresh)
-                val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                _state.update { it.copy(
-                    driverAvailableOffers = offers.items,
-                    driverOffersPage = 0,
-                    driverOffersHasMore = offers.currentPage + 1 < offers.totalPages,
-                    driverOffersTotalPages = offers.totalPages,
-                    driverOffersTotalCount = offers.totalCount
-                ) }
+                when (val offers = PackageRepository.fetchAvailablePackages(page = 0, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        if (gen != sessionGeneration) return@launch
+                        _state.update { it.copy(
+                            driverAvailableOffers = offers.page.items,
+                            driverOffersPage = 0,
+                            driverOffersHasMore = offers.page.currentPage + 1 < offers.page.totalPages,
+                            driverOffersTotalPages = offers.page.totalPages,
+                            driverOffersTotalCount = offers.page.totalCount
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.w("TripViewModel", "refreshDriverPackages offers: ${offers.message}")
+                    }
+                }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "refreshDriverPackages: ${e.message}", e)
                 // Don't clear existing data on failure — keep showing what we have
+                if (!AuthRepository.isNetworkAvailable()) {
+                    _toastEvent.emit("You need an internet connection to refresh — showing saved data")
+                }
             } finally {
-                _state.update { it.copy(isRefreshingPackages = false) }
+                if (gen == sessionGeneration) _state.update { it.copy(isRefreshingPackages = false) }
             }
         }
     }
@@ -1677,32 +1846,45 @@ class TripViewModel : ViewModel() {
         val s = _state.value
         if (s.isLoadingMorePackages || !s.driverCurrentHasMore) return
         viewModelScope.launch {
+            val gen = sessionGeneration
             _state.update { it.copy(isLoadingMorePackages = true) }
             try {
                 val nextPage = s.driverCurrentPage + 1
-                val result = PackageRepository.fetchMyPackages(page = nextPage, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                val combined = s.driverCurrentPackages + result.items
-                withContext(Dispatchers.IO) {
-                    PackageCache.saveDriver(
-                        PagedResult(
-                            items = combined,
-                            totalCount = result.totalCount,
-                            totalPages = result.totalPages,
-                            currentPage = nextPage
-                        )
-                    )
+                when (val result = PackageRepository.fetchMyPackages(page = nextPage, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        val page = result.page
+                        val combined = s.driverCurrentPackages + page.items
+                        withContext(Dispatchers.IO) {
+                            PackageCache.saveDriver(
+                                PagedResult(
+                                    items = combined,
+                                    totalCount = page.totalCount,
+                                    totalPages = page.totalPages,
+                                    currentPage = nextPage
+                                )
+                            )
+                        }
+                        if (gen != sessionGeneration) return@launch
+                        _state.update { it.copy(
+                            driverCurrentPackages = combined,
+                            driverCurrentPage = nextPage,
+                            driverCurrentHasMore = page.currentPage + 1 < page.totalPages,
+                            driverCurrentTotalPages = page.totalPages,
+                            driverCurrentTotalCount = page.totalCount,
+                            isLoadingMorePackages = false
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.w("TripViewModel", "loadMoreDriverCurrent: ${result.message}")
+                        if (gen == sessionGeneration) {
+                            _state.update { it.copy(isLoadingMorePackages = false) }
+                            _toastEvent.emit("Couldn't load more packages")
+                        }
+                    }
                 }
-                _state.update { it.copy(
-                    driverCurrentPackages = combined,
-                    driverCurrentPage = nextPage,
-                    driverCurrentHasMore = result.currentPage + 1 < result.totalPages,
-                    driverCurrentTotalPages = result.totalPages,
-                    driverCurrentTotalCount = result.totalCount,
-                    isLoadingMorePackages = false
-                ) }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadMoreDriverCurrent: ${e.message}", e)
-                _state.update { it.copy(isLoadingMorePackages = false) }
+                if (gen == sessionGeneration) _state.update { it.copy(isLoadingMorePackages = false) }
             }
         }
     }
@@ -1711,21 +1893,34 @@ class TripViewModel : ViewModel() {
         val s = _state.value
         if (s.isLoadingMorePackages || !s.driverOffersHasMore) return
         viewModelScope.launch {
+            val gen = sessionGeneration
             _state.update { it.copy(isLoadingMorePackages = true) }
             try {
                 val nextPage = s.driverOffersPage + 1
-                val result = PackageRepository.fetchAvailablePackages(page = nextPage, order = com.gocavgo.ikuriye.type.SortOrder.DESC)
-                _state.update { it.copy(
-                    driverAvailableOffers = s.driverAvailableOffers + result.items,
-                    driverOffersPage = nextPage,
-                    driverOffersHasMore = result.currentPage + 1 < result.totalPages,
-                    driverOffersTotalPages = result.totalPages,
-                    driverOffersTotalCount = result.totalCount,
-                    isLoadingMorePackages = false
-                ) }
+                when (val result = PackageRepository.fetchAvailablePackages(page = nextPage, order = com.gocavgo.ikuriye.type.SortOrder.DESC)) {
+                    is FetchPackagesResult.Success -> {
+                        val page = result.page
+                        if (gen != sessionGeneration) return@launch
+                        _state.update { it.copy(
+                            driverAvailableOffers = s.driverAvailableOffers + page.items,
+                            driverOffersPage = nextPage,
+                            driverOffersHasMore = page.currentPage + 1 < page.totalPages,
+                            driverOffersTotalPages = page.totalPages,
+                            driverOffersTotalCount = page.totalCount,
+                            isLoadingMorePackages = false
+                        ) }
+                    }
+                    is FetchPackagesResult.Error -> {
+                        Log.w("TripViewModel", "loadMoreDriverOffers: ${result.message}")
+                        if (gen == sessionGeneration) {
+                            _state.update { it.copy(isLoadingMorePackages = false) }
+                            _toastEvent.emit("Couldn't load more offers")
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadMoreDriverOffers: ${e.message}", e)
-                _state.update { it.copy(isLoadingMorePackages = false) }
+                if (gen == sessionGeneration) _state.update { it.copy(isLoadingMorePackages = false) }
             }
         }
     }
@@ -1733,6 +1928,11 @@ class TripViewModel : ViewModel() {
     // ── Transfer Methods ──────────────────────────────────────────────────────
 
     fun openTransferCreationDialog(packageId: String) {
+        val existing = _state.value.clientPackages.find { it.id == packageId }
+        if (existing?.hasOpenTransfer == true) {
+            viewModelScope.launch { _toastEvent.emit("This package already has an open transfer") }
+            return
+        }
         _state.update { it.copy(
             showTransferCreationDialog = true,
             transferCreationPackageId = packageId,
@@ -1744,6 +1944,12 @@ class TripViewModel : ViewModel() {
     // ── Selection Mode & Batch Transfer Methods ──────────────────────────────
 
     fun startSelectionMode(packageId: String) {
+        val s = _state.value
+        val pkg = (s.driverCurrentPackages + s.driverAvailableOffers).find { it.id == packageId }
+        if (pkg?.hasOpenTransfer == true) {
+            viewModelScope.launch { _toastEvent.emit("Package has an open transfer — cannot select") }
+            return
+        }
         _state.update { it.copy(
             isSelectionMode = true,
             selectedPackageIds = setOf(packageId)
@@ -1753,6 +1959,11 @@ class TripViewModel : ViewModel() {
     fun togglePackageSelection(packageId: String) {
         _state.update { s ->
             val current = s.selectedPackageIds
+            if (packageId !in current) {
+                // Don't let packages with an open transfer into the selection set.
+                val pkg = (s.driverCurrentPackages + s.driverAvailableOffers).find { it.id == packageId }
+                if (pkg?.hasOpenTransfer == true) return@update s
+            }
             val updated = if (packageId in current) current - packageId else current + packageId
             s.copy(selectedPackageIds = updated)
         }
@@ -1779,12 +1990,16 @@ class TripViewModel : ViewModel() {
         val ruleType = s.selectedTransferRuleType ?: return
         if (trackingCodes.isEmpty()) return
 
-        // Map tracking codes to internal UUIDs for the API
-        val packageUuids = (s.driverCurrentPackages + s.driverAvailableOffers)
-            .filter { it.id in trackingCodes }
-            .map { it.packageUuid }
-            .filter { it.isNotBlank() }
+        // Never include packages that already have an open transfer.
+        val available = s.driverCurrentPackages + s.driverAvailableOffers
+        val eligiblePackages = available.filter { it.id in trackingCodes && !it.hasOpenTransfer }
+        if (eligiblePackages.isEmpty()) {
+            viewModelScope.launch { _toastEvent.emit("Selected packages already have open transfers") }
+            return
+        }
 
+        // Map tracking codes to internal UUIDs for the API
+        val packageUuids = eligiblePackages.map { it.packageUuid }.filter { it.isNotBlank() }
         if (packageUuids.isEmpty()) {
             viewModelScope.launch { _toastEvent.emit("No packages found with valid IDs") }
             return
@@ -1797,13 +2012,19 @@ class TripViewModel : ViewModel() {
                 ruleType = ruleType
             )
             if (result != null) {
+                val updatedById = eligiblePackages.associate { pkg ->
+                    pkg.id to pkg.copy(
+                        transferId = result.id,
+                        transferStatus = result.status
+                    )
+                }
+                withContext(Dispatchers.IO) {
+                    updatedById.values.forEach { PackageCache.mergeDriverUpdate(it) }
+                }
                 _state.update { s2 ->
                     s2.copy(
                         driverCurrentPackages = s2.driverCurrentPackages.map { pkg ->
-                            if (pkg.id in trackingCodes) pkg.copy(
-                                transferId = result.id,
-                                transferStatus = result.status
-                            ) else pkg
+                            updatedById[pkg.id] ?: pkg
                         },
                         isCreatingTransfer = false,
                         showBatchTransferDialog = false,
@@ -1860,6 +2081,11 @@ class TripViewModel : ViewModel() {
             viewModelScope.launch { _toastEvent.emit("Package has no valid server ID") }
             return
         }
+        // Never create a transfer on top of an already-open transfer.
+        if (pkg.hasOpenTransfer) {
+            viewModelScope.launch { _toastEvent.emit("This package already has an open transfer") }
+            return
+        }
 
         viewModelScope.launch {
             _state.update { it.copy(isCreatingTransfer = true) }
@@ -1870,13 +2096,15 @@ class TripViewModel : ViewModel() {
             )
             if (result != null) {
                 // Update the package with transfer info
+                val updated = pkg.copy(
+                    transferId = result.id,
+                    transferStatus = result.status
+                )
+                withContext(Dispatchers.IO) { PackageCache.mergeClientUpdate(updated) }
                 _state.update { s2 ->
                     s2.copy(
-                        clientPackages = s2.clientPackages.map { pkg ->
-                            if (pkg.id == trackingCode) pkg.copy(
-                                transferId = result.id,
-                                transferStatus = result.status
-                            ) else pkg
+                        clientPackages = s2.clientPackages.map { it ->
+                            if (it.id == trackingCode) updated else it
                         },
                         isCreatingTransfer = false,
                         showTransferCreationDialog = false,
@@ -2069,12 +2297,16 @@ class TripViewModel : ViewModel() {
     fun publicTrackPackage(code: String) {
         viewModelScope.launch {
             _state.update { it.copy(publicTrackingPackage = null, publicTrackingError = "") }
-            val pkg = PackageRepository.trackByCode(code)
-            _state.update {
-                it.copy(
-                    publicTrackingPackage = pkg,
-                    publicTrackingError = if (pkg == null) "No package found with code \"$code\"" else ""
-                )
+            when (val result = PackageRepository.trackByCode(code)) {
+                is SingleResult.Success -> _state.update {
+                    it.copy(publicTrackingPackage = result.data, publicTrackingError = "")
+                }
+                is SingleResult.NotFound -> _state.update {
+                    it.copy(publicTrackingError = "No package found with code \"$code\"")
+                }
+                is SingleResult.Failure -> _state.update {
+                    it.copy(publicTrackingError = "Failed to look up package — try again")
+                }
             }
         }
     }
@@ -2298,7 +2530,7 @@ class TripViewModel : ViewModel() {
             )
             
             val mediaId = uploadResult?.mediaId
-            Log.d("PackageMedia", "Upload completed: mediaId=$mediaId")
+            if (BuildConfig.DEBUG) Log.d(TAG, "Upload completed: mediaId=$mediaId")
             _state.update { s ->
                 s.copy(
                     mediaUploads = s.mediaUploads.map { m ->
@@ -2431,10 +2663,10 @@ class TripViewModel : ViewModel() {
         if (!notice.resourceType.equals("PACKAGE", ignoreCase = true) || notice.resourceId.isBlank()) return
 
         viewModelScope.launch {
-            val pkg = PackageRepository.fetchPackageById(notice.resourceId)
-            if (pkg == null) {
-                _toastEvent.emit("Could not load the package for this notification")
-                return@launch
+            val pkg = when (val result = PackageRepository.fetchPackageById(notice.resourceId)) {
+                is SingleResult.Success -> result.data
+                is SingleResult.NotFound -> { _toastEvent.emit("Package not found for this notification"); return@launch }
+                is SingleResult.Failure -> { _toastEvent.emit("Could not load the package for this notification"); return@launch }
             }
             when (_state.value.appRole) {
                 AppRole.DRIVER -> {
@@ -2611,7 +2843,11 @@ class TripViewModel : ViewModel() {
             for (notice in packageNotices.take(5)) {
                 syncedNoticeIds.add(notice.id)
                 try {
-                    val freshPkg = PackageRepository.fetchPackageById(notice.resourceId) ?: continue
+                    val freshPkg = when (val result = PackageRepository.fetchPackageById(notice.resourceId)) {
+                        is SingleResult.Success -> result.data
+                        is SingleResult.NotFound -> continue
+                        is SingleResult.Failure -> continue
+                    }
                     withContext(Dispatchers.IO) {
                         if (_state.value.appRole == AppRole.CLIENT) {
                             PackageCache.mergeClientUpdate(freshPkg)

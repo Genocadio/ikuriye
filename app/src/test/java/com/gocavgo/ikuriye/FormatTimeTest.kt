@@ -28,14 +28,17 @@ class FormatTimeTest {
 
     @Test
     fun hoursAgo_returnsHoursSuffix() {
+        assertEquals("1hr ago", formatTime(Instant.now().minusSeconds(3600).toString()))
         val iso = Instant.now().minusSeconds(3 * 3600).toString()
-        assertEquals("3h ago", formatTime(iso))
+        assertEquals("3hr ago", formatTime(iso))
     }
 
     @Test
-    fun daysAgo_returnsDaysSuffix() {
+    fun daysAgo_returnsNaturalDayPhrases() {
+        assertEquals("yesterday", formatTime(Instant.now().minusSeconds(86_400).toString()))
         val iso = Instant.now().minusSeconds(4 * 86_400).toString()
-        assertEquals("4d ago", formatTime(iso))
+        assertEquals("4 days ago", formatTime(iso))
+        assertEquals("1 week ago", formatTime(Instant.now().minusSeconds(10 * 86_400).toString()))
     }
 
     @Test
@@ -45,16 +48,12 @@ class FormatTimeTest {
     }
 
     @Test
-    fun olderThanAWeek_returnsMonthDayWithoutRawIso() {
-        val iso = Instant.parse("2026-01-05T10:00:00Z")
-        val formatted = formatTime(iso.toString())
-        // Month name may vary by locale, but the day must match the local-zone rendering
-        // and the output must never be a raw ISO timestamp.
-        val expectedDay = java.time.format.DateTimeFormatter.ofPattern("dd")
-            .format(iso.atZone(java.time.ZoneId.systemDefault()))
+    fun olderThanAWeek_neverReturnsRawIsoTimestamp() {
+        val iso = Instant.now().minusSeconds(45 * 86_400L).toString()
+        val formatted = formatTime(iso)
         assertFalse(formatted.endsWith("Z"))
         assertFalse(formatted.contains("T10:00:00"))
-        assertEquals(expectedDay, formatted.takeLast(2))
+        assertEquals("last month", formatted)
     }
 
     @Test

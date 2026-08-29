@@ -220,6 +220,12 @@ object NexxAuth {
     fun observeSession(scope: CoroutineScope) {
         scope.launch {
             while (true) {
+                // Stop the health-check loop once the session is gone (logout,
+                // server rejection, cleared token) — no more periodic refresh pings.
+                if (!isLoggedIn()) {
+                    Log.d(TAG, "observeSession: no active session — stopping")
+                    break
+                }
                 val exp = getJwtExpirySeconds()
                 val now = System.currentTimeMillis() / 1000
                 val remaining = exp?.minus(now)
