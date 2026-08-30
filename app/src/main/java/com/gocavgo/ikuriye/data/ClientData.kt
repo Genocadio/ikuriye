@@ -18,6 +18,7 @@ enum class PackageStatus {
     PENDING,
     PICKED_UP,
     IN_TRANSIT,
+    ARRIVED_AT_OFFICE,
     PENDING_CONFIRMATION,
     OUT_FOR_DELIVERY,
     DELIVERED,
@@ -27,6 +28,7 @@ enum class PackageStatus {
 data class ClientPackage(
     val id: String = UUID.randomUUID().toString().take(8).uppercase(),
     val trackingCode: String = "",
+    val deliveryType: String = "FIXED_ROUTE",
     val senderId: String = "",
     val senderName: String,
     val senderPhone: String,
@@ -60,7 +62,10 @@ data class ClientPackage(
     // Server-returned transfers list — includes all open transfers
     val transfers: List<ServerTransferInfo> = emptyList(),
     // Internal server UUID — used when calling mutations that need the backend ID
-    val packageUuid: String = ""
+    val packageUuid: String = "",
+    // Raw backend status string (e.g. ORIGIN_OFFICE, DESTINATION_OFFICE, ASSIGNED_DRIVER)
+    // Used to determine the correct driver action for FIXED_ROUTE packages
+    val backendStatus: String = ""
 )
 
 /**

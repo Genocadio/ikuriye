@@ -64,7 +64,9 @@ import com.gocavgo.ikuriye.ui.RoleSelectionScreen
 import com.gocavgo.ikuriye.ui.TrackPackageScreen
 import com.gocavgo.ikuriye.ui.driver.AcceptTransferCodeDialog
 import com.gocavgo.ikuriye.ui.driver.ConfirmTransferDialog
+import com.gocavgo.ikuriye.ui.driver.RejectTransferDialog
 import com.gocavgo.ikuriye.ui.driver.RequestTransferDialog
+import com.gocavgo.ikuriye.ui.driver.SecureTransferCodeRevealDialog
 import com.gocavgo.ikuriye.ui.driver.TransferCreationDialog
 import com.gocavgo.ikuriye.ui.theme.IkuriyeTheme
 import com.gocavgo.ikuriye.ui.theme.LocalDriversColors
@@ -263,6 +265,23 @@ class MainActivity : ComponentActivity() {
                         onDismiss = vm::closeConfirmTransferDialog,
                         onConfirm = vm::confirmTransferRequest,
                         isConfirming = state.isConfirmingTransfer
+                    )
+                }
+
+                // ── Reject Transfer Dialog ───────────────────────────────────
+                if (state.showRejectTransferDialog && state.rejectTransferId != null) {
+                    RejectTransferDialog(
+                        onDismiss = vm::closeRejectTransferDialog,
+                        onReject = vm::rejectTransferRequest,
+                        isRejecting = state.isRejectingTransfer
+                    )
+                }
+
+                // ── Secure Transfer Code Reveal Dialog ───────────────────────
+                if (state.showTransferCodeRevealDialog && state.transferCodeRevealValue.isNotBlank()) {
+                    SecureTransferCodeRevealDialog(
+                        transferCode = state.transferCodeRevealValue,
+                        onDismiss = vm::dismissTransferCodeRevealDialog
                     )
                 }
 
@@ -498,6 +517,7 @@ class MainActivity : ComponentActivity() {
                                             currentUserId = state.clientProfile.id,
                                             onCreateTransfer = vm::openTransferCreationDialog,
                                             onConfirmTransfer = vm::openConfirmTransferDialog,
+                                            onRejectTransfer = vm::openRejectTransferDialog,
                                             onGeneratePickupCode = vm::generatePickupCode,
                                             onConfirmDelivery = vm::confirmDeliveryFromCode,
                                             pendingDeliveryCode = if (state.deliveryConfirmationPackageUuid == selectedPkg.packageUuid) state.deliveryConfirmationCode else ""
@@ -574,6 +594,7 @@ class MainActivity : ComponentActivity() {
                                         onDismissMenus = vm::dismissClientMenus,
                                         onCreateTransfer = vm::openTransferCreationDialog,
                                         onConfirmTransfer = vm::openConfirmTransferDialog,
+                                        onRejectTransfer = vm::openRejectTransferDialog,
                                         onGeneratePickupCode = vm::generatePickupCode,
                                         hasUnsavedDraft = hasUnsavedDraft,
                                         packagesFetchedOnce = state.clientPackagesFetchedOnce,

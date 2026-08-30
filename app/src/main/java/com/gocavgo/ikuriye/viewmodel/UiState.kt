@@ -216,6 +216,14 @@ data class TripUiState(
     val confirmTransferPackageId: String? = null,
     val confirmTransferId: String? = null,
     val isConfirmingTransfer: Boolean = false,
+    // Reject transfer
+    val showRejectTransferDialog: Boolean = false,
+    val rejectTransferPackageId: String? = null,
+    val rejectTransferId: String? = null,
+    val isRejectingTransfer: Boolean = false,
+    // SECURE transfer code reveal after creation
+    val showTransferCodeRevealDialog: Boolean = false,
+    val transferCodeRevealValue: String = "",
     // Driver accept via transfer
     val showAcceptTransferCodeDialog: Boolean = false,
     val acceptTransferCodeInput: String = "",

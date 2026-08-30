@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gocavgo.ikuriye.SearchUsersQuery
@@ -387,6 +388,133 @@ fun ConfirmTransferDialog(
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !isConfirming) {
                 Text("Cancel", color = colors.textSecondary)
+            }
+        }
+    )
+}
+
+// ── Reject Transfer Dialog ────────────────────────────────────────────────────
+
+@Composable
+fun RejectTransferDialog(
+    onDismiss: () -> Unit,
+    onReject: () -> Unit,
+    isRejecting: Boolean = false
+) {
+    val colors = LocalDriversColors.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(18.dp),
+        containerColor = colors.surface,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(36.dp).clip(CircleShape).background(Color.Red.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) { Icon(Icons.Filled.Cancel, null, tint = Color.Red, modifier = Modifier.size(20.dp)) }
+                Spacer(Modifier.width(10.dp))
+                Text("Reject Transfer", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            }
+        },
+        text = {
+            Column {
+                Text("Are you sure you want to reject this transfer request?", color = colors.textPrimary, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("The requesting party will be notified and the transfer will be cancelled.", color = colors.textSecondary, fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onReject,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
+                modifier = Modifier.height(40.dp),
+                enabled = !isRejecting
+            ) {
+                if (isRejecting) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Filled.Close, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Reject", fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isRejecting) {
+                Text("Cancel", color = colors.textSecondary)
+            }
+        }
+    )
+}
+
+// ── Secure Transfer Code Reveal Dialog ──────────────────────────────────────
+
+@Composable
+fun SecureTransferCodeRevealDialog(
+    transferCode: String,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalDriversColors.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(18.dp),
+        containerColor = colors.surface,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(36.dp).clip(CircleShape).background(colors.blue.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) { Icon(Icons.Filled.Key, null, tint = colors.blue, modifier = Modifier.size(20.dp)) }
+                Spacer(Modifier.width(10.dp))
+                Text("Secure Transfer Code", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            }
+        },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Text("Share this code with the driver to accept the transfer:", color = colors.textSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(12.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.surfaceAlt,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = transferCode,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary,
+                        modifier = Modifier.padding(vertical = 16.dp, horizontal = 24.dp),
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("Transfer Code", transferCode)
+                        clipboard.setPrimaryClip(clip)
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, colors.blue.copy(alpha = 0.4f))
+                ) {
+                    Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(14.dp), tint = colors.blue)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Copy Code", fontSize = 12.sp, color = colors.blue)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = colors.blue),
+                modifier = Modifier.height(40.dp)
+            ) {
+                Text("Done", fontWeight = FontWeight.Bold)
             }
         }
     )

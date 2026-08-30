@@ -20,7 +20,7 @@ class PackageMappingTest {
         assertEquals(PackageStatus.PICKED_UP, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.ASSIGNED_DRIVER))
         assertEquals(PackageStatus.IN_TRANSIT, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.IN_TRANSIT))
         assertEquals(PackageStatus.IN_TRANSIT, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.ORIGIN_OFFICE))
-        assertEquals(PackageStatus.IN_TRANSIT, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.DESTINATION_OFFICE))
+        assertEquals(PackageStatus.ARRIVED_AT_OFFICE, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.DESTINATION_OFFICE))
         assertEquals(PackageStatus.DELIVERED, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.DELIVERED))
         assertEquals(PackageStatus.DELIVERED, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.COMPLETED))
         assertEquals(PackageStatus.CANCELLED, PackageRepository.mapStatus(com.gocavgo.ikuriye.type.PackageStatus.CANCELLED))
@@ -37,6 +37,11 @@ class PackageMappingTest {
         assertEquals(PackageStatus.DELIVERED, PackageRepository.mapStatusFromEventType("COMPLETED"))
         assertEquals(PackageStatus.CANCELLED, PackageRepository.mapStatusFromEventType("cancelled"))
         assertEquals(PackageStatus.OUT_FOR_DELIVERY, PackageRepository.mapStatusFromEventType("READY_FOR_COLLECTION"))
+    }
+
+    @Test
+    fun mapStatusFromEventType_mapsDestinationOfficeToArrivedAtOffice() {
+        assertEquals(PackageStatus.ARRIVED_AT_OFFICE, PackageRepository.mapStatusFromEventType("DESTINATION_OFFICE"))
     }
 
     @Test
@@ -106,6 +111,7 @@ class PackageMappingTest {
         assertEquals("Jean", mapped.custodians[0].name)
         assertEquals(CustodianRole.DRIVER.name, mapped.custodians[0].role)
         assertEquals("2026-01-02T00:00:00Z", mapped.receivedAt)
+        assertEquals("DELIVERED", mapped.backendStatus)
     }
 
     @Test

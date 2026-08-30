@@ -951,6 +951,66 @@ class TripViewModel : ViewModel() {
         _state.update { it.copy(isTransferDialogOpen = false, selectedDriverPackageId = null) }
     }
 
+    /**
+     * Driver picks up a package: transitions ASSIGNED_DRIVER → IN_TRANSIT
+     * (or ORIGIN_OFFICE → IN_TRANSIT for FIXED_ROUTE when driver picks up directly).
+     */
+    fun pickupPackage(packageId: String) {
+        val pkg = _state.value.driverCurrentPackages.find { it.id == packageId } ?: return
+        if (pkg.packageUuid.isBlank()) {
+            viewModelScope.launch { _toastEvent.emit("Missing package UUID") }
+            return
+        }
+        viewModelScope.launch {
+            val result = PackageRepository.updatePackageStatus(pkg.packageUuid, "IN_TRANSIT", "Driver picked up package")
+            if (result != null) {
+                _state.update { s ->
+                    s.copy(
+                        driverCurrentPackages = s.driverCurrentPackages.map {
+                            if (it.id == packageId) it.copy(
+                                status = result.status,
+                                backendStatus = "IN_TRANSIT"
+                            ) else it
+                        }
+                    )
+                }
+                _toastEvent.emit("Package picked up — heading to destination")
+            } else {
+                _toastEvent.emit("Failed to pick up package")
+            }
+        }
+    }
+
+    /**
+     * Driver arrives at destination office: transitions IN_TRANSIT → DESTINATION_OFFICE.
+     * Used for FIXED_ROUTE packages when the driver reaches the destination office.
+     */
+    fun arriveAtOffice(packageId: String) {
+        val pkg = _state.value.driverCurrentPackages.find { it.id == packageId } ?: return
+        if (pkg.packageUuid.isBlank()) {
+            viewModelScope.launch { _toastEvent.emit("Missing package UUID") }
+            return
+        }
+        viewModelScope.launch {
+            val result = PackageRepository.updatePackageStatus(pkg.packageUuid, "DESTINATION_OFFICE", "Arrived at destination office")
+            if (result != null) {
+                _state.update { s ->
+                    s.copy(
+                        driverCurrentPackages = s.driverCurrentPackages.map {
+                            if (it.id == packageId) it.copy(
+                                status = PackageStatus.ARRIVED_AT_OFFICE,
+                                backendStatus = "DESTINATION_OFFICE"
+                            ) else it
+                        }
+                    )
+                }
+                _toastEvent.emit("Arrived at destination office — waiting for worker to make package ready")
+            } else {
+                _toastEvent.emit("Failed to mark arrival")
+            }
+        }
+    }
+
     fun confirmTransfer() {
         val s = _state.value
         val pkg = s.driverCurrentPackages.find { it.id == s.selectedDriverPackageId } ?: return
@@ -1306,7 +1366,7 @@ class TripViewModel : ViewModel() {
             }
 
             val input = CreatePackageInput(
-                deliveryType = DeliveryType.OPEN,
+                deliveryType = DeliveryType.FIXED_ROUTE,
                 sender = Optional.present(sender),
                 receiver = receiver,
                 origin = origin,
@@ -2114,12 +2174,27 @@ class TripViewModel : ViewModel() {
                         transferMatchUserName = null
                     )
                 }
-                _toastEvent.emit("Transfer created successfully")
+                // For SECURE transfers, show the code to the customer so they can share it
+                val code = result.transferCode
+                if (ruleType == "SECURE" && !code.isNullOrBlank()) {
+                    _state.update {
+                        it.copy(
+                            showTransferCodeRevealDialog = true,
+                            transferCodeRevealValue = code
+                        )
+                    }
+                } else {
+                    _toastEvent.emit("Transfer created successfully")
+                }
             } else {
                 _state.update { it.copy(isCreatingTransfer = false) }
                 _toastEvent.emit("Failed to create transfer")
             }
         }
+    }
+
+    fun dismissTransferCodeRevealDialog() {
+        _state.update { it.copy(showTransferCodeRevealDialog = false, transferCodeRevealValue = "") }
     }
 
     fun openConfirmTransferDialog(packageId: String, transferId: String) {
@@ -2163,6 +2238,52 @@ class TripViewModel : ViewModel() {
             } else {
                 _state.update { it.copy(isConfirmingTransfer = false) }
                 _toastEvent.emit("Failed to confirm transfer")
+            }
+        }
+    }
+
+    fun openRejectTransferDialog(packageId: String, transferId: String) {
+        _state.update { it.copy(
+            showRejectTransferDialog = true,
+            rejectTransferPackageId = packageId,
+            rejectTransferId = transferId
+        ) }
+    }
+
+    fun closeRejectTransferDialog() {
+        _state.update { it.copy(
+            showRejectTransferDialog = false,
+            rejectTransferPackageId = null,
+            rejectTransferId = null
+        ) }
+    }
+
+    fun rejectTransferRequest() {
+        val transferId = _state.value.rejectTransferId ?: return
+        val packageId = _state.value.rejectTransferPackageId ?: return
+
+        viewModelScope.launch {
+            _state.update { it.copy(isRejectingTransfer = true) }
+            val result = PackageRepository.rejectTransfer(transferId)
+            if (result != null) {
+                _state.update { s2 ->
+                    s2.copy(
+                        clientPackages = s2.clientPackages.map { pkg ->
+                            if (pkg.id == packageId) pkg.copy(
+                                transferStatus = result.status,
+                                transferId = null
+                            ) else pkg
+                        },
+                        isRejectingTransfer = false,
+                        showRejectTransferDialog = false,
+                        rejectTransferPackageId = null,
+                        rejectTransferId = null
+                    )
+                }
+                _toastEvent.emit("Transfer rejected")
+            } else {
+                _state.update { it.copy(isRejectingTransfer = false) }
+                _toastEvent.emit("Failed to reject transfer")
             }
         }
     }

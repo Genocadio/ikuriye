@@ -42,6 +42,7 @@ fun TrackPackageScreen(
     currentUserId: String = "",
     onCreateTransfer: (String) -> Unit = {},
     onConfirmTransfer: (String, String) -> Unit = { _, _ -> },
+    onRejectTransfer: (String, String) -> Unit = { _, _ -> },
     onGeneratePickupCode: (String) -> Unit = {},
     onConfirmDelivery: (String, String) -> Unit = { _, _ -> },
     pendingDeliveryCode: String = ""
@@ -152,7 +153,7 @@ fun TrackPackageScreen(
         when {
             pkg.status == PackageStatus.DELIVERED -> DeliveredPackageSummary(pkg, currentUserId)
             pkg.status == PackageStatus.CANCELLED -> CancelledPackageSummary(pkg)
-            else                                  -> ActivePackageTracking(pkg, currentUserId, onCreateTransfer, onConfirmTransfer, onGeneratePickupCode, onConfirmDelivery, pendingDeliveryCode)
+            else                                  -> ActivePackageTracking(pkg, currentUserId, onCreateTransfer, onConfirmTransfer, onRejectTransfer, onGeneratePickupCode, onConfirmDelivery, pendingDeliveryCode)
         }
         }
     }
@@ -340,6 +341,7 @@ private fun ActivePackageTracking(
     currentUserId: String = "",
     onCreateTransfer: (String) -> Unit = {},
     onConfirmTransfer: (String, String) -> Unit = { _, _ -> },
+    onRejectTransfer: (String, String) -> Unit = { _, _ -> },
     onGeneratePickupCode: (String) -> Unit = {},
     onConfirmDelivery: (String, String) -> Unit = { _, _ -> },
     pendingDeliveryCode: String = ""
@@ -361,6 +363,7 @@ private fun ActivePackageTracking(
     val statusColor = when (pkg.status) {
         PackageStatus.PENDING -> colors.amber
         PackageStatus.PICKED_UP, PackageStatus.IN_TRANSIT -> colors.blue
+        PackageStatus.ARRIVED_AT_OFFICE -> colors.blue
         PackageStatus.PENDING_CONFIRMATION -> colors.amber
         PackageStatus.OUT_FOR_DELIVERY -> colors.green
         PackageStatus.DELIVERED -> colors.blue
@@ -370,6 +373,7 @@ private fun ActivePackageTracking(
         PackageStatus.PENDING          -> "Awaiting pickup"
         PackageStatus.PICKED_UP        -> "Picked up"
         PackageStatus.IN_TRANSIT       -> "In transit"
+        PackageStatus.ARRIVED_AT_OFFICE -> "At destination office"
         PackageStatus.PENDING_CONFIRMATION -> "Awaiting delivery confirmation"
         PackageStatus.OUT_FOR_DELIVERY -> "Arriving soon"
         PackageStatus.DELIVERED        -> "Delivered"
@@ -386,6 +390,7 @@ private fun ActivePackageTracking(
                                 PackageStatus.PENDING -> Icons.Filled.Schedule
                                 PackageStatus.PICKED_UP -> Icons.Filled.Inventory
                                 PackageStatus.IN_TRANSIT -> Icons.Filled.LocalShipping
+                                PackageStatus.ARRIVED_AT_OFFICE -> Icons.Filled.Store
                                 PackageStatus.PENDING_CONFIRMATION -> Icons.Filled.Verified
                                 PackageStatus.OUT_FOR_DELIVERY -> Icons.Filled.DirectionsCar
                                 PackageStatus.DELIVERED -> Icons.Filled.CheckCircle
@@ -503,7 +508,15 @@ private fun ActivePackageTracking(
                                 ) {
                                     Icon(Icons.Filled.Verified, null, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(6.dp))
-                                    Text("Confirm Transfer", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Confirm", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = { pkg.transferId?.let { onRejectTransfer(pkg.id, it) } },
+                                    modifier = Modifier.height(40.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, androidx.compose.ui.graphics.Color.Red.copy(alpha = 0.4f))
+                                ) {
+                                    Icon(Icons.Filled.Close, null, modifier = Modifier.size(16.dp), tint = androidx.compose.ui.graphics.Color.Red)
                                 }
                             }
                             if (canConfirmDelivery) {

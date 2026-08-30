@@ -1,0 +1,11 @@
+mutation RejectTransfer($transferId: ID!) {
+  rejectTransfer(transferId: $transferId) {
+    id
+    ruleType
+    status
+    packages {
+      id
+      packageId
+    }
+  }
+}

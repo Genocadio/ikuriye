@@ -69,6 +69,7 @@ fun PackageDetailSheet(pkg: ClientPackage, onDismiss: () -> Unit) {
             val statusColor = when (pkg.status) {
                 PackageStatus.PICKED_UP          -> colors.amber
                 PackageStatus.IN_TRANSIT         -> colors.blue
+                PackageStatus.ARRIVED_AT_OFFICE  -> colors.blue
                 PackageStatus.OUT_FOR_DELIVERY,
                 PackageStatus.DELIVERED          -> colors.green
                 PackageStatus.CANCELLED          -> colors.red

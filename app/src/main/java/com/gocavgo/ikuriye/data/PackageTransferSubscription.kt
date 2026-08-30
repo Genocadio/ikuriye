@@ -238,7 +238,8 @@ object PackageTransferSubscription {
             transfers = serverTransfers,
             transferId = firstActive?.id,
             transferStatus = firstActive?.status,
-            transferRuleType = firstActive?.ruleType
+            transferRuleType = firstActive?.ruleType,
+            backendStatus = pkg.status.name
         )
     }
 }

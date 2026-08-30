@@ -122,6 +122,7 @@ fun ClientHomeScreen(
     onDismissMenus: () -> Unit,
     onCreateTransfer: (String) -> Unit = {},
     onConfirmTransfer: (String, String) -> Unit = { _, _ -> },
+    onRejectTransfer: (String, String) -> Unit = { _, _ -> },
     onGeneratePickupCode: (String) -> Unit = {},
     hasUnsavedDraft: Boolean = false,
     packagesFetchedOnce: Boolean = false,
@@ -130,7 +131,7 @@ fun ClientHomeScreen(
     onNoticesClick: () -> Unit = {},
     noticeCount: Int = 0,
     notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
-) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, clientDataState, onConfirmDeliveryDirect = onConfirmDeliveryDirect, onNoticesClick = onNoticesClick, noticeCount = noticeCount, notices = notices)
+) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onRejectTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, clientDataState, onConfirmDeliveryDirect = onConfirmDeliveryDirect, onNoticesClick = onNoticesClick, noticeCount = noticeCount, notices = notices)
 
 @Composable
 fun CreatePackageScreen(
@@ -157,10 +158,11 @@ fun TrackPackageScreen(
     currentUserId: String = "",
     onCreateTransfer: (String) -> Unit = {},
     onConfirmTransfer: (String, String) -> Unit = { _, _ -> },
+    onRejectTransfer: (String, String) -> Unit = { _, _ -> },
     onGeneratePickupCode: (String) -> Unit = {},
     onConfirmDelivery: (String, String) -> Unit = { _, _ -> },
     pendingDeliveryCode: String = ""
-) = TrackPackageScreenImpl(pkg, onBack, currentUserId, onCreateTransfer, onConfirmTransfer, onGeneratePickupCode, onConfirmDelivery, pendingDeliveryCode)
+) = TrackPackageScreenImpl(pkg, onBack, currentUserId, onCreateTransfer, onConfirmTransfer, onRejectTransfer, onGeneratePickupCode, onConfirmDelivery, pendingDeliveryCode)
 
 @Composable
 fun ProfileQuickMenu(

@@ -292,7 +292,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, onPickup = { viewModel.pickupPackage(pkg.id) }, onArriveAtOffice = { viewModel.arriveAtOffice(pkg.id) }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -311,7 +311,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, notices = state.notices)
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, onPickup = { viewModel.pickupPackage(pkg.id) }, onArriveAtOffice = { viewModel.arriveAtOffice(pkg.id) }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -450,6 +450,7 @@ private fun SelectableCurrentPackageCard(
     val statusColor = when (pkg.status) {
         PackageStatus.PICKED_UP -> colors.amber
         PackageStatus.IN_TRANSIT -> colors.blue
+        PackageStatus.ARRIVED_AT_OFFICE -> colors.blue
         PackageStatus.OUT_FOR_DELIVERY, PackageStatus.DELIVERED -> colors.green
         else -> colors.textSecondary
     }
@@ -527,6 +528,8 @@ fun DriverCurrentPackageCard(
     onTransfer: () -> Unit,
     onDetail: () -> Unit,
     onLongPress: () -> Unit = {},
+    onPickup: () -> Unit = {},
+    onArriveAtOffice: () -> Unit = {},
     notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
 ) {
     val colors = LocalDriversColors.current
@@ -539,6 +542,7 @@ fun DriverCurrentPackageCard(
     val statusColor = when (pkg.status) {
         PackageStatus.PICKED_UP -> colors.amber
         PackageStatus.IN_TRANSIT -> colors.blue
+        PackageStatus.ARRIVED_AT_OFFICE -> colors.blue
         PackageStatus.PENDING_CONFIRMATION -> colors.amber
         PackageStatus.OUT_FOR_DELIVERY, PackageStatus.DELIVERED -> colors.green
         else -> colors.textSecondary
@@ -605,29 +609,84 @@ fun DriverCurrentPackageCard(
             if (!isDelivered && !isTransferOpen) {
                 Spacer(Modifier.height(8.dp))
                 val isPendingConfirmation = pkg.status == PackageStatus.PENDING_CONFIRMATION
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = onDeliver,
-                        modifier = Modifier.weight(1f).heightIn(min = 38.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = if (isPendingConfirmation) colors.blue else colors.green)
-                    ) {
-                        Icon(
-                            if (isPendingConfirmation) Icons.Filled.Lock else Icons.Filled.Check,
-                            null,
-                            modifier = Modifier.size(16.dp)
-                        );
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (isPendingConfirmation) "Enter Confirmation Code" else "Deliver",
-                            fontSize = if (isPendingConfirmation) 11.sp else 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
+                val isFixedRoute = pkg.deliveryType == "FIXED_ROUTE"
+                val needsPickup = isFixedRoute && pkg.backendStatus in listOf("ASSIGNED_DRIVER", "ORIGIN_OFFICE")
+                val needsArrival = isFixedRoute && pkg.backendStatus == "IN_TRANSIT"
+                val isAtDestinationOffice = isFixedRoute && pkg.backendStatus == "DESTINATION_OFFICE"
+                val canDeliver = !needsPickup && !needsArrival && !isAtDestinationOffice
+                
+                when {
+                    // FIXED_ROUTE: Driver needs to pick up first (ASSIGNED_DRIVER or ORIGIN_OFFICE)
+                    needsPickup -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onPickup,
+                                modifier = Modifier.weight(1f).heightIn(min = 38.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.blue)
+                            ) {
+                                Icon(Icons.Filled.LocalShipping, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Pick Up Package", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                        }
                     }
-                    if (!isPendingConfirmation) {
-                        OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
-                            Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                    // FIXED_ROUTE: Driver in transit, needs to mark arrival at destination office
+                    needsArrival -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onArriveAtOffice,
+                                modifier = Modifier.weight(1f).heightIn(min = 38.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.green)
+                            ) {
+                                Icon(Icons.Filled.LocationOn, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Arrive at Office", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                        }
+                    }
+                    // FIXED_ROUTE: Arrived at destination — waiting for worker to mark ready
+                    isAtDestinationOffice -> {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = colors.blue.copy(alpha = 0.06f),
+                            border = BorderStroke(1.dp, colors.blue.copy(alpha = 0.2f))
+                        ) {
+                            Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.HourglassTop, null, tint = colors.blue, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Awaiting office to make package ready for collection", color = colors.blue, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                    // Standard deliver / confirm flow
+                    else -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onDeliver,
+                                modifier = Modifier.weight(1f).heightIn(min = 38.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = if (isPendingConfirmation) colors.blue else colors.green)
+                            ) {
+                                Icon(
+                                    if (isPendingConfirmation) Icons.Filled.Lock else Icons.Filled.Check,
+                                    null,
+                                    modifier = Modifier.size(16.dp)
+                                );
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    if (isPendingConfirmation) "Enter Confirmation Code" else "Deliver",
+                                    fontSize = if (isPendingConfirmation) 11.sp else 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                            }
+                            if (!isPendingConfirmation) {
+                                OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
+                                    Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                                }
+                            }
                         }
                     }
                 }

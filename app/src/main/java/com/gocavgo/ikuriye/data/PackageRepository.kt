@@ -6,6 +6,7 @@ import com.gocavgo.ikuriye.AcceptPackageByTransferMutation
 import com.gocavgo.ikuriye.AvailablePackagesQuery
 import com.gocavgo.ikuriye.ConfirmDeliveryMutation
 import com.gocavgo.ikuriye.ConfirmTransferMutation
+import com.gocavgo.ikuriye.RejectTransferMutation
 import com.gocavgo.ikuriye.CreatePackageMutation
 import com.gocavgo.ikuriye.CreateTransferMutation
 import com.gocavgo.ikuriye.InitiateDeliveryMutation
@@ -15,6 +16,8 @@ import com.gocavgo.ikuriye.PackageByIdQuery
 import com.gocavgo.ikuriye.PackageByTrackingCodeQuery
 import com.gocavgo.ikuriye.RegenerateDeliveryCodeMutation
 import com.gocavgo.ikuriye.RequestTransferMutation
+import com.gocavgo.ikuriye.UpdatePackageStatusMutation
+import com.gocavgo.ikuriye.type.UpdatePackageStatusInput
 import com.gocavgo.ikuriye.network.ApolloClientProvider
 import com.gocavgo.ikuriye.type.AcceptTransferInput
 import com.gocavgo.ikuriye.type.ConfirmDeliveryInput
@@ -231,6 +234,7 @@ object PackageRepository {
     private fun buildClientPackage(
         trackingCode: String,
         packageUuid: String,
+        deliveryType: String = "FIXED_ROUTE",
         senderId: String = "",
         senderName: String = "",
         senderPhone: String = "",
@@ -253,13 +257,15 @@ object PackageRepository {
         transfers: List<ServerTransferInfo> = emptyList(),
         transferId: String? = null,
         transferStatus: String? = null,
-        transferRuleType: String? = null
+        transferRuleType: String? = null,
+        backendStatus: String = ""
     ): ClientPackage {
         val firstActive = transfers.firstOrNull { it.status in OPEN_TRANSFER_STATUSES }
         return ClientPackage(
             id = trackingCode,
             trackingCode = trackingCode,
             packageUuid = packageUuid,
+            deliveryType = deliveryType,
             senderId = senderId,
             senderName = senderName,
             senderPhone = senderPhone,
@@ -284,7 +290,8 @@ object PackageRepository {
             transfers = transfers,
             transferId = transferId ?: firstActive?.id,
             transferStatus = transferStatus ?: firstActive?.status,
-            transferRuleType = transferRuleType ?: firstActive?.ruleType
+            transferRuleType = transferRuleType ?: firstActive?.ruleType,
+            backendStatus = backendStatus
         )
     }
 
@@ -314,6 +321,7 @@ object PackageRepository {
         return buildClientPackage(
             trackingCode = pkg.trackingCode,
             packageUuid = pkg.id,
+            deliveryType = pkg.deliveryType.name,
             senderId = sender?.userId ?: "",
             senderName = sender?.name ?: "",
             senderPhone = sender?.phone ?: "",
@@ -338,7 +346,8 @@ object PackageRepository {
             transfers = serverTransfers,
             transferId = transfer?.id,
             transferStatus = transfer?.status?.name,
-            transferRuleType = transfer?.ruleType?.name
+            transferRuleType = transfer?.ruleType?.name,
+            backendStatus = pkg.status.name
         )
     }
 
@@ -364,6 +373,7 @@ object PackageRepository {
         return buildClientPackage(
             trackingCode = pkg.trackingCode,
             packageUuid = pkg.id,
+            deliveryType = pkg.deliveryType.name,
             senderId = sender?.userId ?: "",
             senderName = sender?.name ?: "",
             senderPhone = sender?.phone ?: "",
@@ -385,7 +395,8 @@ object PackageRepository {
             custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
                 c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
             },
-            transfers = serverTransfers
+            transfers = serverTransfers,
+            backendStatus = pkg.status.name
         )
     }
 
@@ -432,7 +443,8 @@ object PackageRepository {
             custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
                 c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
             },
-            transfers = serverTransfers
+            transfers = serverTransfers,
+            backendStatus = pkg.status.name
         )
     }
 
@@ -473,7 +485,8 @@ object PackageRepository {
             statusHistory = history,
             custodians = pkg.custodians.map { c ->
                 CustodianInfo(c.id, c.userId, c.name ?: "", c.phone ?: "", c.role.name, c.assignedAt)
-            }
+            },
+            backendStatus = pkg.status.name
         )
     }
 
@@ -520,7 +533,8 @@ object PackageRepository {
             custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
                 c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
             },
-            transfers = serverTransfers
+            transfers = serverTransfers,
+            backendStatus = pkg.status.name
         )
     }
 
@@ -561,7 +575,8 @@ object PackageRepository {
             statusHistory = history,
             custodians = pkg.custodians.map { c ->
                 CustodianInfo(c.id, c.userId, c.name ?: "", c.phone ?: "", c.role.name, c.assignedAt)
-            }
+            },
+            backendStatus = pkg.status.name
         )
     }
 
@@ -646,6 +661,85 @@ object PackageRepository {
             }
         } catch (e: Exception) {
             Log.e(TAG, "confirmDelivery: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * Updates the status of a package (e.g. ASSIGNED_DRIVER → IN_TRANSIT, IN_TRANSIT → DESTINATION_OFFICE).
+     * Used by drivers for FIXED_ROUTE flows to transition between states.
+     */
+    suspend fun updatePackageStatus(packageUuid: String, newStatus: String, notes: String = ""): ClientPackage? {
+        return try {
+            val statusEnum = try {
+                GqlPackageStatus.valueOf(newStatus)
+            } catch (_: IllegalArgumentException) {
+                Log.e(TAG, "updatePackageStatus: unknown status '$newStatus'")
+                return null
+            }
+            val actorId = AuthRepository.getCachedUser()?.id ?: ""
+            val input = UpdatePackageStatusInput(
+                packageId = packageUuid,
+                actorId = actorId,
+                status = statusEnum,
+                notes = Optional.presentIfNotNull(notes.ifBlank { null })
+            )
+            val response = ApolloClientProvider.client
+                .mutation(UpdatePackageStatusMutation(input))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "updatePackageStatus: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                val pkg = data.updatePackageStatus
+                val sender = pkg.people?.find { it?.role?.name == "SENDER" }
+                val receiver = pkg.people?.find { it?.role?.name == "RECEIVER" }
+                val origin = pkg.locations?.find { it?.type?.name == "ORIGIN" }
+                val destination = pkg.locations?.find { it?.type?.name == "DESTINATION" }
+                val history = (pkg.events ?: emptyList()).mapNotNull { event ->
+                    event?.let {
+                        StatusUpdate(
+                            status = mapStatusFromEventType(it.eventType),
+                            timestamp = it.createdAt,
+                            location = "",
+                            message = it.description ?: ""
+                        )
+                    }
+                }
+                buildClientPackage(
+                    trackingCode = pkg.trackingCode,
+                    packageUuid = pkg.id,
+                    deliveryType = pkg.deliveryType.name,
+                    senderId = sender?.userId ?: "",
+                    senderName = sender?.name ?: "",
+                    senderPhone = sender?.phone ?: "",
+                    fromAddress = origin?.placeName ?: "",
+                    recipientId = receiver?.userId ?: "",
+                    recipientName = receiver?.name ?: "",
+                    recipientPhone = receiver?.phone ?: "",
+                    toAddress = destination?.placeName ?: "",
+                    description = pkg.details?.description ?: "",
+                    weight = pkg.details?.weight?.let { "$it kg" } ?: "",
+                    category = pkg.details?.category ?: "",
+                    fragile = pkg.details?.fragile ?: false,
+                    mediaUrls = pkg.details?.media?.mapNotNull { it?.url } ?: emptyList(),
+                    photoCount = pkg.details?.media?.size ?: 0,
+                    status = mapStatus(pkg.status),
+                    createdAt = pkg.createdAt,
+                    updatedAt = pkg.updatedAt ?: "",
+                    statusHistory = history,
+                    custodians = (pkg.custodians ?: emptyList()).mapNotNull { c ->
+                        c?.let { CustodianInfo(it.id, it.userId, it.name ?: "", it.phone ?: "", it.role.name, it.assignedAt) }
+                    },
+                    backendStatus = pkg.status.name
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "updatePackageStatus: exception — ${e.message}", e)
             null
         }
     }
@@ -760,6 +854,33 @@ object PackageRepository {
             }
         } catch (e: Exception) {
             Log.e(TAG, "confirmTransfer: exception — ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun rejectTransfer(transferId: String): TransferInfo? {
+        return try {
+            val response = ApolloClientProvider.client
+                .mutation(RejectTransferMutation(transferId))
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "rejectTransfer: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                null
+            } else if (data != null) {
+                val t = data.rejectTransfer
+                TransferInfo(
+                    id = t.id,
+                    ruleType = t.ruleType.name,
+                    status = t.status.name,
+                    packageIds = t.packages.mapNotNull { it?.packageId }
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "rejectTransfer: exception — ${e.message}", e)
             null
         }
     }
@@ -912,7 +1033,7 @@ object PackageRepository {
             GqlPackageStatus.CANCELLED -> PackageStatus.CANCELLED
             GqlPackageStatus.ORIGIN_OFFICE -> PackageStatus.IN_TRANSIT
             GqlPackageStatus.ASSIGNED_DRIVER -> PackageStatus.PICKED_UP
-            GqlPackageStatus.DESTINATION_OFFICE -> PackageStatus.IN_TRANSIT
+            GqlPackageStatus.DESTINATION_OFFICE -> PackageStatus.ARRIVED_AT_OFFICE
             GqlPackageStatus.READY_FOR_COLLECTION -> PackageStatus.OUT_FOR_DELIVERY
             else -> PackageStatus.PENDING
         }
@@ -926,7 +1047,8 @@ object PackageRepository {
             "DELIVERY_INITIATED" -> PackageStatus.PENDING_CONFIRMATION
             "DELIVERED", "COMPLETED" -> PackageStatus.DELIVERED
             "CANCELLED" -> PackageStatus.CANCELLED
-            "ORIGIN_OFFICE", "ASSIGNED_DRIVER", "DESTINATION_OFFICE" -> PackageStatus.IN_TRANSIT
+            "ORIGIN_OFFICE", "ASSIGNED_DRIVER" -> PackageStatus.IN_TRANSIT
+            "DESTINATION_OFFICE" -> PackageStatus.ARRIVED_AT_OFFICE
             "READY_FOR_COLLECTION" -> PackageStatus.OUT_FOR_DELIVERY
             else -> PackageStatus.PENDING
         }

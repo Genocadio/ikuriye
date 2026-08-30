@@ -32,6 +32,9 @@ mutation UpdatePackageStatus($input: UpdatePackageStatusInput!) {
       description
       fragile
       weight
+      media {
+        url
+      }
     }
     events {
       id
