@@ -1,0 +1,14 @@
+query MyProfile {
+  myProfile {
+    id
+    email
+    phone
+    firstName
+    lastName
+    username
+    role
+    status
+    createdAt
+    updatedAt
+  }
+}

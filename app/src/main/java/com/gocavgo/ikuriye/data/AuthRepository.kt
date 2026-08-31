@@ -6,7 +6,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
 import com.gocavgo.ikuriye.BuildConfig
-import com.gocavgo.ikuriye.SyncUserMutation
+import com.gocavgo.ikuriye.MyProfileQuery
 import com.gocavgo.ikuriye.data.dto.AuthResult
 import com.gocavgo.ikuriye.data.dto.AuthUserDto
 import com.gocavgo.ikuriye.data.dto.RoleDto
@@ -117,15 +117,35 @@ object AuthRepository {
                 return AuthResult.Error(error)
             }
 
+            // Nexxauth response includes the full user object with roles —
+            // use it directly for UI routing.
+            val nexxUser = NexxAuth.getCachedNexxauthUser()
+            if (nexxUser != null) {
+                val role = mapNexxauthRole(nexxUser.roles)
+                val user = AuthUserDto(
+                    id = nexxUser.id,
+                    email = nexxUser.email,
+                    phone = nexxUser.phone,
+                    firstName = nexxUser.firstName,
+                    lastName = nexxUser.lastName,
+                    username = nexxUser.username,
+                    avatarUrl = null,
+                    role = role,
+                    status = if (nexxUser.enabled) UserStatusDto.ACTIVE else UserStatusDto.DISABLED
+                )
+                cacheUser(user)
+                return AuthResult.Success(user)
+            }
+
+            // Fallback: no user data from Nexxauth
             if (!isNetworkAvailable()) {
                 return AuthResult.Error("No internet connection — please try again when online")
             }
-            val sync = syncWithBackend()
-            when (sync) {
-                is SyncResult.Success -> AuthResult.Success(sync.user)
+            val profile = fetchProfile()
+            when (profile) {
+                is SyncResult.Success -> AuthResult.Success(profile.user)
                 is SyncResult.Error -> {
-                    Log.e(TAG, "signUp: sync failed — ${sync.message}")
-                    AuthResult.Error("Account created! Could not sync with server: ${sync.message}")
+                    AuthResult.Error("Account created! Could not fetch profile: ${profile.message}")
                 }
             }
         } catch (e: Exception) {
@@ -142,19 +162,39 @@ object AuthRepository {
                 return AuthResult.Error(error)
             }
 
+            // Nexxauth response includes the full user object with roles —
+            // use it directly for UI routing. No extra backend call needed.
+            val nexxUser = NexxAuth.getCachedNexxauthUser()
+            if (nexxUser != null) {
+                val role = mapNexxauthRole(nexxUser.roles)
+                val user = AuthUserDto(
+                    id = nexxUser.id,
+                    email = nexxUser.email,
+                    phone = nexxUser.phone,
+                    firstName = nexxUser.firstName,
+                    lastName = nexxUser.lastName,
+                    username = nexxUser.username,
+                    avatarUrl = getCachedUser()?.avatarUrl,
+                    role = role,
+                    status = if (nexxUser.enabled) UserStatusDto.ACTIVE else UserStatusDto.DISABLED
+                )
+                cacheUser(user)
+                return AuthResult.Success(user)
+            }
+
+            // Fallback: no user data from Nexxauth (shouldn't happen)
             if (!isNetworkAvailable()) {
                 val cached = getCachedUser()
                 if (cached != null) return AuthResult.Success(cached)
                 return AuthResult.Error("No internet connection — please try again when online")
             }
-            val sync = syncWithBackend()
-            when (sync) {
-                is SyncResult.Success -> AuthResult.Success(sync.user)
+            val profile = fetchProfile()
+            when (profile) {
+                is SyncResult.Success -> AuthResult.Success(profile.user)
                 is SyncResult.Error -> {
-                    Log.e(TAG, "signIn: sync failed — ${sync.message}")
                     val cached = getCachedUser()
                     if (cached != null) AuthResult.Success(cached)
-                    else AuthResult.Error("Login successful! Could not sync profile: ${sync.message}")
+                    else AuthResult.Error("Login successful! Could not fetch profile: ${profile.message}")
                 }
             }
         } catch (e: Exception) {
@@ -169,13 +209,13 @@ object AuthRepository {
                 val cached = getCachedUser()
                 return if (cached != null) AuthResult.Success(cached) else AuthResult.Error("No internet — showing offline data")
             }
-            val sync = syncWithBackend()
-            when (sync) {
-                is SyncResult.Success -> AuthResult.Success(sync.user)
+            val profile = fetchProfile()
+            when (profile) {
+                is SyncResult.Success -> AuthResult.Success(profile.user)
                 is SyncResult.Error -> {
                     val cached = getCachedUser()
                     if (cached != null) AuthResult.Success(cached)
-                    else AuthResult.Error("Could not sync — no internet connection")
+                    else AuthResult.Error("Could not fetch profile — no internet connection")
                 }
             }
         } else {
@@ -215,10 +255,10 @@ object AuthRepository {
                 if (error != null) return AuthResult.Error(error)
             }
 
-            val sync = syncWithBackend()
-            when (sync) {
-                is SyncResult.Success -> AuthResult.Success(sync.user)
-                is SyncResult.Error -> AuthResult.Error("Profile updated but sync failed: ${sync.message}")
+            val profile = fetchProfile()
+            when (profile) {
+                is SyncResult.Success -> AuthResult.Success(profile.user)
+                is SyncResult.Error -> AuthResult.Error("Profile updated but sync failed: ${profile.message}")
             }
         } catch (e: Exception) {
             Log.e(TAG, "updateProfile: exception — ${e.message}", e)
@@ -242,20 +282,44 @@ object AuthRepository {
 
     fun isLoggedIn(): Boolean = NexxAuth.isLoggedIn()
 
-    private suspend fun syncWithBackend(): SyncResult {
+    /**
+     * Maps Nexxauth role names to the local RoleDto enum.
+     * Nexxauth roles are lowercase strings (e.g. "driver", "worker").
+     * If the user has multiple roles, returns the highest-precedence one.
+     */
+    private fun mapNexxauthRole(roles: List<String>): RoleDto {
+        val precedence = mapOf(
+            "customer" to 1,
+            "driver" to 2,
+            "worker" to 3,
+            "admin" to 4,
+            "super_admin" to 5
+        )
+        return roles.mapNotNull { role ->
+            val name = role.uppercase().replace("-", "_")
+            try { RoleDto.valueOf(name) to (precedence[role.lowercase()] ?: 0) } catch (_: Exception) { null }
+        }.maxByOrNull { it.second }?.first ?: RoleDto.CUSTOMER
+    }
+
+    /**
+     * Fetches the user profile from the backend via the `myProfile` query.
+     * The backend automatically syncs from Nexxauth when the JWT's dataHash
+     * doesn't match the stored value — no explicit sync mutation needed.
+     */
+    private suspend fun fetchProfile(): SyncResult {
         return try {
-            if (BuildConfig.DEBUG) Log.d(TAG, "syncWithBackend: sending SyncUser mutation")
+            if (BuildConfig.DEBUG) Log.d(TAG, "fetchProfile: querying myProfile")
             val response = ApolloClientProvider.client
-                .mutation(SyncUserMutation())
+                .query(MyProfileQuery())
                 .execute()
             if (response.errors != null && response.errors!!.isNotEmpty()) {
                 val errors = response.errors!!.joinToString("; ") { it.message ?: "unknown" }
-                Log.e(TAG, "syncWithBackend: GraphQL errors — $errors")
+                Log.e(TAG, "fetchProfile: GraphQL errors — $errors")
                 SyncResult.Error(errors)
             } else if (response.data != null) {
-                val gqlUser = response.data!!.syncUser ?: run {
-                    Log.e(TAG, "syncWithBackend: syncUser is null in response data")
-                    return SyncResult.Error("GraphQL sync returned no user data")
+                val gqlUser = response.data!!.myProfile ?: run {
+                    Log.e(TAG, "fetchProfile: myProfile is null in response data")
+                    return SyncResult.Error("GraphQL query returned no user data")
                 }
                 val role = when (gqlUser.role) {
                     com.gocavgo.ikuriye.type.Role.DRIVER -> RoleDto.DRIVER
@@ -287,12 +351,12 @@ object AuthRepository {
                 appContext?.let { ctx -> AvatarCache.cache(ctx, user.avatarUrl) }
                 SyncResult.Success(user)
             } else {
-                Log.e(TAG, "syncWithBackend: GraphQL response has no data and no errors")
-                SyncResult.Error("GraphQL sync returned no data")
+                Log.e(TAG, "fetchProfile: GraphQL response has no data and no errors")
+                SyncResult.Error("GraphQL query returned no data")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "syncWithBackend: exception — ${e.message}", e)
-            SyncResult.Error("Sync failed: ${e.message}")
+            Log.e(TAG, "fetchProfile: exception — ${e.message}", e)
+            SyncResult.Error("Profile fetch failed: ${e.message}")
         }
     }
 }

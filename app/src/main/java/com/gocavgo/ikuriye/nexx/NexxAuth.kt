@@ -52,10 +52,7 @@ object NexxAuth {
         get() = BuildConfig.NEXXAUTH_BASE_URL.trimEnd('/')
 
     private val orgApiBase: String
-        get() {
-            val orgId = getJwtOrgId() ?: return "$baseUrl/organisations/unknown"
-            return "$baseUrl/organisations/$orgId"
-        }
+        get() = "$baseUrl/organisations"
 
     private const val JSON = "application/json; charset=utf-8"
 
@@ -209,6 +206,39 @@ object NexxAuth {
 
     fun isLoggedIn(): Boolean = getAccessToken() != null
 
+    /**
+     * Returns the user profile persisted from the Nexxauth login/refresh response.
+     * The roles come from the Nexxauth `user.roles` array in the auth response —
+     * no extra backend call needed for UI gating.
+     */
+    fun getCachedNexxauthUser(): NexxauthUser? {
+        val p = prefs ?: return null
+        val id = p.getString("user_id", null) ?: return null
+        val rolesStr = p.getString("nexxauth_roles", null)
+        val roles = if (!rolesStr.isNullOrBlank()) rolesStr.split(",") else emptyList()
+        return NexxauthUser(
+            id = id,
+            email = p.getString("nexxauth_email", "") ?: "",
+            phone = p.getString("nexxauth_phone", "")?.takeIf { it.isNotBlank() },
+            firstName = p.getString("nexxauth_first_name", "")?.takeIf { it.isNotBlank() },
+            lastName = p.getString("nexxauth_last_name", "")?.takeIf { it.isNotBlank() },
+            username = p.getString("nexxauth_username", "")?.takeIf { it.isNotBlank() },
+            roles = roles,
+            enabled = p.getBoolean("nexxauth_enabled", true)
+        )
+    }
+
+    data class NexxauthUser(
+        val id: String,
+        val email: String,
+        val phone: String?,
+        val firstName: String?,
+        val lastName: String?,
+        val username: String?,
+        val roles: List<String>,
+        val enabled: Boolean
+    )
+
     fun clearSessionLocally() {
         prefs?.edit()?.clear()?.apply()
     }
@@ -277,7 +307,11 @@ object NexxAuth {
 
     /**
      * Parses an OrgAuthResponse from register/login/refresh. On success persists
-     * the session and returns null; on failure returns the server error message.
+     * the session (tokens + full user profile from Nexxauth) and returns null;
+     * on failure returns the server error message.
+     *
+     * The Nexxauth response includes the full user object with roles — the
+     * frontend uses this directly instead of making an extra backend call.
      */
     private fun handleAuthResponse(response: Pair<Int, String>, flow: String): String? {
         val (code, body) = response
@@ -303,11 +337,32 @@ object NexxAuth {
                 putString("access_token", accessToken)
                 if (refreshToken.isNotBlank()) putString("refresh_token", refreshToken)
                 putLong("expires_at", System.currentTimeMillis() / 1000 + expiresIn)
+                // Persist the full user profile from the Nexxauth response
                 if (userId.isNotBlank()) putString("user_id", userId)
+                if (user != null) {
+                    putString("nexxauth_email", user.optString("email", ""))
+                    putString("nexxauth_phone", user.optString("phone", ""))
+                    putString("nexxauth_first_name", user.optString("firstName", ""))
+                    putString("nexxauth_last_name", user.optString("lastName", ""))
+                    putString("nexxauth_username", user.optString("username", ""))
+                    putBoolean("nexxauth_enabled", user.optBoolean("enabled", true))
+                    // Roles array: ["driver"] etc.
+                    val rolesArray = user.optJSONArray("roles")
+                    if (rolesArray != null && rolesArray.length() > 0) {
+                        val roles = mutableListOf<String>()
+                        for (i in 0 until rolesArray.length()) {
+                            rolesArray.optString(i)?.let { roles.add(it) }
+                        }
+                        putString("nexxauth_roles", roles.joinToString(","))
+                    }
+                }
             }?.apply()
 
             if (BuildConfig.DEBUG) {
-                Log.d(TAG, "$flow: session established (userId=$userId, expiresIn=${expiresIn}s, refresh=${refreshToken.isNotBlank()})")
+                val roles = user?.optJSONArray("roles")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { arr.optString(it) }
+                }
+                Log.d(TAG, "$flow: session established (userId=$userId, roles=$roles, expiresIn=${expiresIn}s, refresh=${refreshToken.isNotBlank()})")
             }
             null
         } catch (e: Exception) {
@@ -350,18 +405,5 @@ object NexxAuth {
         }
     }
 
-    /** Decodes the JWT payload to read the `orgId` claim. */
-    private fun getJwtOrgId(): Int? {
-        val token = getAccessToken() ?: return null
-        val parts = token.split(".")
-        if (parts.size < 2) return null
-        return try {
-            val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE), Charsets.UTF_8)
-            val json = JSONObject(payload)
-            if (json.has("orgId")) json.getInt("orgId") else null
-        } catch (e: Exception) {
-            Log.w(TAG, "getJwtOrgId: failed to decode — ${e.message}")
-            null
-        }
-    }
+
 }
