@@ -25,6 +25,7 @@ object BackendStorage {
     private const val TAG = "BackendStorage"
     private const val MAX_UPLOAD_ATTEMPTS = 3
     private const val RETRY_DELAY_MS = 1_000L
+    private const val MAX_FILE_SIZE_BYTES = 100L * 1024 * 1024 // 100 MB — must match server limit
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -49,6 +50,11 @@ object BackendStorage {
 
         val extension = mimeType.substringAfter("/", "jpeg")
         val fileName = "${UUID.randomUUID()}.$extension"
+
+        if (byteArray.size > MAX_FILE_SIZE_BYTES) {
+            Log.e(TAG, "File too large: ${byteArray.size} bytes exceeds ${MAX_FILE_SIZE_BYTES} byte limit")
+            return@withContext null
+        }
 
         onProgress?.invoke(0.0)
         onProgress?.invoke(5.0)
