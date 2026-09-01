@@ -166,6 +166,9 @@ data class TripUiState(
     val driverOffersHasMore: Boolean = true,
     val driverOffersTotalPages: Int = 0,
     val driverOffersTotalCount: Int = 0,
+    // Driver incoming transfers (packages assigned by workers)
+    val driverIncomingTransfers: List<com.gocavgo.ikuriye.data.PackageRepository.MatchedTransfer> = emptyList(),
+    val isLoadingTransfers: Boolean = false,
     // Public tracking (pre-login)
     val publicTrackingPackage: ClientPackage? = null,
     val publicTrackingError: String = "",

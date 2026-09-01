@@ -3,6 +3,7 @@ package com.gocavgo.ikuriye.data
 import android.util.Log
 import com.gocavgo.ikuriye.NewPackageTransferSubscription
 import com.gocavgo.ikuriye.network.ApolloClientProvider
+import com.gocavgo.ikuriye.nexx.NexxAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -147,6 +148,26 @@ object PackageTransferSubscription {
 
         while (started) {
             try {
+                // ── Proactive token refresh before each reconnect attempt ──
+                // The subscription reconnection uses the token baked into the
+                // ApolloClient's WebSocket headers. If the JWT expired between
+                // reconnects the backend rejects the connection with EXPIRED_TOKEN.
+                // Refresh proactively so the next ApolloClient rebuild picks up
+                // a valid token.
+                try {
+                    val exp = getJwtExpirySeconds()
+                    val now = System.currentTimeMillis() / 1000
+                    if (exp == null || exp - now < 5 * 60) {
+                        Log.d(TAG, "proactive refresh before reconnect (exp=${exp}, now=$now)")
+                        NexxAuth.refreshSession()
+                        // Rebuild ApolloClient so the fresh token is used for the
+                        // WebSocket upgrade headers and connection payload.
+                        ApolloClientProvider.resetClient()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "proactive refresh failed: ${e.message}")
+                }
+
                 Log.d(TAG, "connecting subscription...")
                 ApolloClientProvider.client
                     .subscription(NewPackageTransferSubscription())
@@ -241,5 +262,22 @@ object PackageTransferSubscription {
             transferRuleType = firstActive?.ruleType,
             backendStatus = pkg.status.name
         )
+    }
+
+    /** Decodes the JWT payload to read the `exp` claim (Unix seconds). */
+    private fun getJwtExpirySeconds(): Long? {
+        val token = NexxAuth.getAccessToken() ?: return null
+        val parts = token.split(".")
+        if (parts.size < 2) return null
+        return try {
+            val payload = String(
+                android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE),
+                Charsets.UTF_8
+            )
+            val json = org.json.JSONObject(payload)
+            if (json.has("exp")) json.getLong("exp") else null
+        } catch (e: Exception) {
+            null
+        }
     }
 }

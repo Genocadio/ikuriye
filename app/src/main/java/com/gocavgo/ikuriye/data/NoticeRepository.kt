@@ -246,6 +246,29 @@ object NoticeRepository {
                     bigText = "Your package ${notice.resourceId} has been picked up and is on its way."
                     importance = android.app.NotificationManager.IMPORTANCE_DEFAULT
                 }
+                "TRANSFER_PENDING" -> {
+                    channelId = "transfer_updates"
+                    title = "Package Transferred to You"
+                    val payload = notice.payload
+                    val trackingCodes = try {
+                        if (payload != null) JSONObject(payload).optString("trackingCodes").takeIf { it.isNotBlank() } else null
+                    } catch (_: Exception) { null }
+                    val ruleType = try {
+                        if (payload != null) JSONObject(payload).optString("ruleType") else null
+                    } catch (_: Exception) { null }
+                    text = if (trackingCodes != null) {
+                        "Package(s) $trackingCodes have been assigned to you"
+                    } else {
+                        notice.message
+                    }
+                    bigText = buildString {
+                        append("A worker has transferred a package to you for acceptance.")
+                        if (trackingCodes != null) append("\n\nPackage(s): $trackingCodes")
+                        if (ruleType != null) append("\nTransfer type: $ruleType")
+                        append("\n\nOpen the app to view and accept the transfer.")
+                    }
+                    importance = android.app.NotificationManager.IMPORTANCE_HIGH
+                }
                 else -> return // Don't show local notification for other event types
             }
 
@@ -257,12 +280,14 @@ object NoticeRepository {
                     channelId,
                     when (channelId) {
                         "delivery_codes" -> "Delivery Codes"
+                        "transfer_updates" -> "Transfer Updates"
                         else -> "Package Updates"
                     },
                     importance
                 ).apply {
                     description = when (channelId) {
                         "delivery_codes" -> "Notifications when a delivery code is issued"
+                        "transfer_updates" -> "Notifications when a package is transferred to you"
                         else -> "Package status update notifications"
                     }
                 }

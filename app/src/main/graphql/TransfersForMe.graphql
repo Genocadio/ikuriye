@@ -1,0 +1,16 @@
+query TransfersForMe {
+  transfersForMe {
+    id
+    creatorId
+    ruleType
+    acceptorType
+    matchUserId
+    status
+    packages {
+      id
+      packageId
+      addedAt
+    }
+    createdAt
+  }
+}

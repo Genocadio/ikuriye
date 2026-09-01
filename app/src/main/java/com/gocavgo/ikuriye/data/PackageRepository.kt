@@ -16,6 +16,7 @@ import com.gocavgo.ikuriye.PackageByIdQuery
 import com.gocavgo.ikuriye.PackageByTrackingCodeQuery
 import com.gocavgo.ikuriye.RegenerateDeliveryCodeMutation
 import com.gocavgo.ikuriye.RequestTransferMutation
+import com.gocavgo.ikuriye.TransfersForMeQuery
 import com.gocavgo.ikuriye.UpdatePackageStatusMutation
 import com.gocavgo.ikuriye.type.UpdatePackageStatusInput
 import com.gocavgo.ikuriye.network.ApolloClientProvider
@@ -966,6 +967,66 @@ object PackageRepository {
             }
         } catch (e: Exception) {
             Log.e(TAG, "fetchMyTransfers: exception — ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * Fetches transfers targeted at the current user (matched by matchUserId).
+     * Returns [MatchedTransfer] list — each with transfer metadata + the matched
+     * package details. Used by the driver's "Transfers" tab to show packages
+     * that workers have assigned to them.
+     */
+    data class MatchedTransfer(
+        val transferId: String,
+        val ruleType: String,
+        val acceptorType: String,
+        val status: String,
+        val creatorId: String,
+        val packages: List<ClientPackage>
+    )
+
+    suspend fun fetchTransfersForMe(): List<MatchedTransfer> {
+        return try {
+            val response = ApolloClientProvider.client
+                .query(TransfersForMeQuery())
+                .execute()
+            val errors = response.errors
+            val data = response.data
+            if (errors != null && errors.isNotEmpty()) {
+                Log.e(TAG, "fetchTransfersForMe: GraphQL errors — ${errors.joinToString("; ") { it.message ?: "unknown" }}")
+                emptyList()
+            } else if (data != null) {
+                val results = mutableListOf<MatchedTransfer>()
+                for (t in data.transfersForMe) {
+                    val pkgIds = t.packages.mapNotNull { it?.packageId }
+                    if (pkgIds.isEmpty()) continue
+
+                    // Fetch each package by UUID to get full details
+                    val packages = mutableListOf<ClientPackage>()
+                    for (pkgId in pkgIds) {
+                        when (val result = fetchPackageById(pkgId)) {
+                            is SingleResult.Success -> packages.add(result.data)
+                            else -> Log.w(TAG, "fetchTransfersForMe: package $pkgId not found")
+                        }
+                    }
+                    if (packages.isNotEmpty()) {
+                        results.add(MatchedTransfer(
+                            transferId = t.id,
+                            ruleType = t.ruleType.name,
+                            acceptorType = t.acceptorType.name,
+                            status = t.status.name,
+                            creatorId = t.creatorId,
+                            packages = packages
+                        ))
+                    }
+                }
+                results
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchTransfersForMe: exception — ${e.message}", e)
             emptyList()
         }
     }

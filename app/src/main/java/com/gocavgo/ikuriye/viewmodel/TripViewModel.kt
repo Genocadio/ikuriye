@@ -1770,6 +1770,8 @@ class TripViewModel : ViewModel() {
                     driverCurrentTotalCount = cached.totalCount
                 ) }
             }
+            // Preload incoming transfers in background
+            loadDriverIncomingTransfers()
         }
     }
 
@@ -1834,6 +1836,8 @@ class TripViewModel : ViewModel() {
                         Log.w("TripViewModel", "loadDriverPackages offers: ${offers.message}")
                     }
                 }
+                // Fetch incoming transfers (worker-to-driver assignments)
+                loadDriverIncomingTransfers()
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadDriverPackages: ${e.message}", e)
                 if (!AuthRepository.isNetworkAvailable()) {
@@ -1890,6 +1894,8 @@ class TripViewModel : ViewModel() {
                         Log.w("TripViewModel", "refreshDriverPackages offers: ${offers.message}")
                     }
                 }
+                // Refresh incoming transfers
+                loadDriverIncomingTransfers()
             } catch (e: Exception) {
                 Log.e("TripViewModel", "refreshDriverPackages: ${e.message}", e)
                 // Don't clear existing data on failure — keep showing what we have
@@ -1981,6 +1987,79 @@ class TripViewModel : ViewModel() {
             } catch (e: Exception) {
                 Log.e("TripViewModel", "loadMoreDriverOffers: ${e.message}", e)
                 if (gen == sessionGeneration) _state.update { it.copy(isLoadingMorePackages = false) }
+            }
+        }
+    }
+
+    // ── Driver Incoming Transfers (packages assigned by workers) ───────────
+
+    /**
+     * Fetches transfers targeted at the current driver (via matchUserId).
+     * These are packages that a worker has explicitly assigned to this driver
+     * and the driver needs to accept.
+     */
+    fun loadDriverIncomingTransfers() {
+        viewModelScope.launch {
+            val gen = sessionGeneration
+            _state.update { it.copy(isLoadingTransfers = true) }
+            try {
+                val transfers = PackageRepository.fetchTransfersForMe()
+                if (gen != sessionGeneration) return@launch
+                _state.update { it.copy(
+                    driverIncomingTransfers = transfers,
+                    isLoadingTransfers = false
+                ) }
+            } catch (e: Exception) {
+                Log.e("TripViewModel", "loadDriverIncomingTransfers: ${e.message}", e)
+                if (gen == sessionGeneration) {
+                    _state.update { it.copy(isLoadingTransfers = false) }
+                    _toastEvent.emit("Couldn't load transfers")
+                }
+            }
+        }
+    }
+
+    /**
+     * Accepts a transfer targeted at this driver (AUTO or SECURE).
+     * Moves the package from incoming transfers to current packages.
+     */
+    fun acceptIncomingTransfer(transferId: String, packageId: String, transferCode: String? = null) {
+        viewModelScope.launch {
+            _state.update { it.copy(isAcceptingTransfer = true) }
+            val success = PackageRepository.acceptPackageByTransfer(transferId, transferCode)
+            if (success) {
+                _state.update { s2 ->
+                    val matched = s2.driverIncomingTransfers.find { it.transferId == transferId }
+                    val pkg = matched?.packages?.find { it.id == packageId }
+                    val accepted = pkg?.copy(
+                        status = PackageStatus.PICKED_UP,
+                        driverName = s2.driverProfile.name,
+                        driverPhone = s2.driverProfile.phone,
+                        driverCompany = "QuickCargo Ltd",
+                        vehicleType = "car",
+                        statusHistory = listOf(StatusUpdate(PackageStatus.PICKED_UP, "Just now", pkg.fromAddress, "Transfer accepted from office"))
+                    )
+                    s2.copy(
+                        driverCurrentPackages = if (accepted != null) listOf(accepted) + s2.driverCurrentPackages else s2.driverCurrentPackages,
+                        driverIncomingTransfers = s2.driverIncomingTransfers.filter { it.transferId != transferId },
+                        showAcceptTransferCodeDialog = false,
+                        acceptTransferPackageId = null,
+                        acceptTransferId = null,
+                        acceptTransferRuleType = null,
+                        acceptTransferCodeInput = "",
+                        acceptTransferCodeError = "",
+                        isAcceptingTransfer = false
+                    )
+                }
+                _toastEvent.emit("Transfer accepted")
+            } else {
+                _state.update { s2 ->
+                    s2.copy(
+                        acceptTransferCodeError = if (transferCode != null) "Invalid transfer code" else "Failed to accept transfer",
+                        isAcceptingTransfer = false
+                    )
+                }
+                _toastEvent.emit("Failed to accept transfer")
             }
         }
     }
@@ -2381,21 +2460,25 @@ class TripViewModel : ViewModel() {
 
             val success = PackageRepository.acceptPackageByTransfer(transferId, code)
             if (success) {
-                // Move package from offers to current packages
+                // Check if the package is in offers (New tab) or incoming transfers (Transfers tab)
+                val offerInOffers = s.driverAvailableOffers.find { it.id == packageId }
+                val matchedTransfer = s.driverIncomingTransfers.find { it.transferId == transferId }
+                val pkg = offerInOffers ?: matchedTransfer?.packages?.find { it.id == packageId }
+
                 _state.update { s2 ->
-                    val offer = s2.driverAvailableOffers.find { it.id == packageId } ?: return@update s2
-                    val accepted = offer.copy(
+                    val accepted = pkg?.copy(
                         status = PackageStatus.PICKED_UP,
                         driverName = s2.driverProfile.name,
                         driverPhone = s2.driverProfile.phone,
                         driverCompany = "QuickCargo Ltd",
                         vehicleType = "car",
                         deliveryCode = packageId.replace("PKG", "DLV"),
-                        statusHistory = listOf(StatusUpdate(PackageStatus.PICKED_UP, "Just now", offer.fromAddress, "Offer accepted via transfer"))
+                        statusHistory = listOf(StatusUpdate(PackageStatus.PICKED_UP, "Just now", pkg.fromAddress, "Offer accepted via transfer"))
                     )
                     s2.copy(
-                        driverCurrentPackages = listOf(accepted) + s2.driverCurrentPackages,
+                        driverCurrentPackages = if (accepted != null) listOf(accepted) + s2.driverCurrentPackages else s2.driverCurrentPackages,
                         driverAvailableOffers = s2.driverAvailableOffers.filter { it.id != packageId },
+                        driverIncomingTransfers = s2.driverIncomingTransfers.filter { it.transferId != transferId },
                         showAcceptTransferCodeDialog = false,
                         acceptTransferPackageId = null,
                         acceptTransferId = null,

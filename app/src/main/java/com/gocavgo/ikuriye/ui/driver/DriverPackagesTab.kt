@@ -113,6 +113,8 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
         else -> GridCells.Fixed(1)
     }
 
+    val filteredTransfers = state.driverIncomingTransfers
+
     val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
     val shimmerAlpha by infiniteTransition.animateFloat(
         initialValue = 0.3f, targetValue = 0.6f,
@@ -122,7 +124,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
 
     var isSearchExpanded by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
-    val pagerState = rememberPagerState(pageCount = { 2 })
+    val pagerState = rememberPagerState(pageCount = { 3 })
     // Sync pager → subTab
     LaunchedEffect(pagerState.currentPage) {
         if (subTab != pagerState.currentPage) {
@@ -231,9 +233,13 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                         }
                         Spacer(Modifier.width(8.dp))
                         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf(0 to "Active", 1 to "New").forEach { (index, label) ->
+                            listOf(0 to "Active", 1 to "New", 2 to "Transfers").forEach { (index, label) ->
                                 val selected = subTab == index
-                                val count    = if (index == 0) state.driverCurrentPackages.size else visibleOffers.size
+                                val count    = when (index) {
+                                    0 -> state.driverCurrentPackages.size
+                                    1 -> visibleOffers.size
+                                    else -> filteredTransfers.size
+                                }
                                 val disabled  = isSelection && index != 0
                                 Surface(
                                     modifier = Modifier.weight(1f),
@@ -320,7 +326,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                 }
                             }
                         }
-                        else -> {
+                        1 -> {
                             if (isDriverInitLoading && filteredOffers.isEmpty()) {
                                 ShimmerList(shimmerAlpha)
                             } else if (visibleOffers.isEmpty()) {
@@ -368,6 +374,38 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                     }
                                     if (state.driverOffersHasMore && !state.isLoadingMorePackages && !isRefreshing) {
                                         item { LaunchedEffect(Unit) { viewModel.loadMoreDriverOffers() } }
+                                    }
+                                }
+                            }
+                        }
+                        2 -> {
+                            // ── Transfers Tab: packages assigned by workers ──
+                            if (state.isLoadingTransfers && filteredTransfers.isEmpty()) {
+                                ShimmerList(shimmerAlpha)
+                            } else if (filteredTransfers.isEmpty()) {
+                                EmptyPackagesState("No incoming transfers", "Packages transferred to you by workers will appear here")
+                            } else {
+                                LazyColumn(
+                                    state = remember { LazyListState() },
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 90.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    items(filteredTransfers, key = { it.transferId }) { matched ->
+                                        matched.packages.forEach { pkg ->
+                                            val acceptAction: () -> Unit = when (matched.ruleType) {
+                                                "SECURE" -> { { viewModel.openAcceptTransferCodeDialog(pkg.id, matched.transferId, "SECURE") } }
+                                                "CONFIRM" -> { { viewModel.openRequestTransferDialog(pkg.id, matched.transferId) } }
+                                                else -> { { viewModel.acceptIncomingTransfer(matched.transferId, pkg.id) } }
+                                            }
+                                            DriverTransferCard(
+                                                pkg = pkg,
+                                                transferId = matched.transferId,
+                                                ruleType = matched.ruleType,
+                                                onAccept = acceptAction,
+                                                onDetail = { viewModel.openPackageDetail(pkg.id) }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -798,6 +836,91 @@ fun DriverOfferCard(
                 Button(onClick = onAccept, modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = colors.blue)) {
                     Icon(icon, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(acceptButtonLabel, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
+            }
+        }
+    }
+    if (showMedia) { MediaCarouselDialog(pkg.mediaUrls) { showMedia = false } }
+}
+
+// ── Transfer Card (worker-to-driver assignment) ───────────────────────────────
+
+@Composable
+fun DriverTransferCard(
+    pkg: ClientPackage,
+    transferId: String,
+    ruleType: String,
+    onAccept: () -> Unit,
+    onDetail: () -> Unit
+) {
+    val colors = LocalDriversColors.current
+    var showMedia by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        border = BorderStroke(1.dp, colors.blue.copy(alpha = 0.3f)),
+        shadowElevation = 3.dp
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(colors.blue.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                    Icon(Icons.AutoMirrored.Filled.CompareArrows, null, tint = colors.blue, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(pkg.id, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        // ── Transfer-type indicator icon ─────────────────
+                        if (ruleType == "SECURE") {
+                            Spacer(Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier.size(20.dp).clip(CircleShape).background(colors.blue.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) { Icon(Icons.Filled.Lock, null, tint = colors.blue, modifier = Modifier.size(11.dp)) }
+                        } else if (ruleType == "CONFIRM") {
+                            Spacer(Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier.size(20.dp).clip(CircleShape).background(colors.amber.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) { Icon(Icons.Filled.HourglassTop, null, tint = colors.amber, modifier = Modifier.size(11.dp)) }
+                        }
+                    }
+                    TruncatedDescription(pkg.description)
+                }
+                Surface(shape = RoundedCornerShape(8.dp), color = colors.blue.copy(alpha = 0.12f)) {
+                    Text("TRANSFER", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = colors.blue, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            AddressRow(Icons.Filled.MyLocation, colors.green, pkg.fromAddress)
+            Spacer(Modifier.height(4.dp))
+            AddressRow(Icons.Filled.LocationOn, colors.red, pkg.toAddress)
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (pkg.weight.isNotBlank()) { Icon(Icons.Filled.Scale, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text(pkg.weight, color = colors.textSecondary, fontSize = 11.sp) }
+                if (pkg.category.isNotBlank()) { if (pkg.weight.isNotBlank()) Spacer(Modifier.width(16.dp)); Icon(Icons.Filled.Category, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text(pkg.category, color = colors.textSecondary, fontSize = 11.sp) }
+                if (pkg.fragile) { Spacer(Modifier.width(16.dp)); Icon(Icons.Filled.Warning, null, tint = colors.amber, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("Fragile", color = colors.amber, fontSize = 11.sp) }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (pkg.photoCount > 0) { Row(modifier = Modifier.clickable { showMedia = true }, verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Photo, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("${pkg.photoCount}", color = colors.textSecondary, fontSize = 11.sp) } }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDetail, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("View Details", color = colors.blue, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+            }
+            Spacer(Modifier.height(8.dp))
+            // ── Accept button — label and icon vary by rule type ─────────
+            val acceptLabel = when (ruleType) {
+                "SECURE" -> "Accept with Code"
+                "CONFIRM" -> "Request to Accept"
+                else -> "Accept Transfer"
+            }
+            val acceptIcon = when (ruleType) {
+                "SECURE" -> Icons.Filled.Lock
+                "CONFIRM" -> Icons.Filled.Send
+                else -> Icons.AutoMirrored.Filled.CompareArrows
+            }
+            Button(onClick = onAccept, modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = colors.blue)) {
+                Icon(acceptIcon, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(acceptLabel, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

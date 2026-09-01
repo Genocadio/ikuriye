@@ -61,6 +61,12 @@ object BackendStorage {
 
         var lastError: Exception? = null
         for (attempt in 1..MAX_UPLOAD_ATTEMPTS) {
+            // Re-fetch token on each attempt — it may have been refreshed by a previous 401
+            val currentToken = NexxAuth.getAccessToken()
+            if (currentToken == null) {
+                Log.e(TAG, "No access token available for upload (attempt $attempt)")
+                return@withContext null
+            }
             try {
                 val body = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
@@ -74,7 +80,7 @@ object BackendStorage {
 
                 val request = Request.Builder()
                     .url("${BuildConfig.GRAPHQL_URL.replace("/graphql", "")}/api/files/upload")
-                    .addHeader("Authorization", "Bearer $token")
+                    .addHeader("Authorization", "Bearer $currentToken")
                     .post(body)
                     .build()
 
@@ -84,7 +90,13 @@ object BackendStorage {
                 val responseBody = response.body?.string()
 
                 if (!response.isSuccessful || responseBody == null) {
-                    Log.w(TAG, "Upload attempt $attempt/$MAX_UPLOAD_ATTEMPTS failed: HTTP ${response.code}")
+                    // If HTTP 401 — try refreshing the token before the next attempt
+                    if (response.code == 401) {
+                        Log.w(TAG, "Upload attempt $attempt/$MAX_UPLOAD_ATTEMPTS got 401 — refreshing token")
+                        NexxAuth.refreshSession()
+                    } else {
+                        Log.w(TAG, "Upload attempt $attempt/$MAX_UPLOAD_ATTEMPTS failed: HTTP ${response.code}")
+                    }
                     if (attempt < MAX_UPLOAD_ATTEMPTS) {
                         kotlinx.coroutines.delay(RETRY_DELAY_MS)
                     }
