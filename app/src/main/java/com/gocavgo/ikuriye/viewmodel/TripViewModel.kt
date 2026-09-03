@@ -67,6 +67,7 @@ class TripViewModel : ViewModel() {
 
     // ── New package subscription (driver-side real-time) ────────────────────
     private var subscriptionJob: kotlinx.coroutines.Job? = null
+    private var transferSubscriptionJob: kotlinx.coroutines.Job? = null
 
     // Invalidates in-flight data loads whenever the session/role changes so a
     // slow fetch that completes AFTER logout cannot repopulate the logged-out UI.
@@ -1651,6 +1652,9 @@ class TripViewModel : ViewModel() {
         // Start the real-time GraphQL subscription (+ polling fallback)
         com.gocavgo.ikuriye.data.PackageTransferSubscription.start(viewModelScope)
 
+        // Start transfer-created subscription for incoming transfers from workers
+        startTransferSubscription()
+
         // Collect events from the subscription
         subscriptionJob = viewModelScope.launch {
             com.gocavgo.ikuriye.data.PackageTransferSubscription.events.collect { pkg ->
@@ -1696,6 +1700,39 @@ class TripViewModel : ViewModel() {
         subscriptionJob?.cancel()
         subscriptionJob = null
         com.gocavgo.ikuriye.data.PackageTransferSubscription.stop()
+        transferSubscriptionJob?.cancel()
+        transferSubscriptionJob = null
+        com.gocavgo.ikuriye.data.TransferCreatedSubscriptionHandler.stop()
+    }
+
+    /**
+     * Subscribes to incoming transfers (worker-to-driver) in real-time.
+     */
+    private fun startTransferSubscription() {
+        transferSubscriptionJob?.cancel()
+
+        // Seed seen-ids from current incoming transfers
+        val initialIds = _state.value.driverIncomingTransfers.map { it.transferId }.toSet()
+        com.gocavgo.ikuriye.data.TransferCreatedSubscriptionHandler.seedSeenIds(initialIds)
+
+        com.gocavgo.ikuriye.data.TransferCreatedSubscriptionHandler.start(viewModelScope)
+
+        transferSubscriptionJob = viewModelScope.launch {
+            com.gocavgo.ikuriye.data.TransferCreatedSubscriptionHandler.events.collect { event ->
+                val matched = event.matched
+                // Skip if transfer already in the list
+                val alreadyPresent = _state.value.driverIncomingTransfers.any { it.transferId == matched.transferId }
+                if (alreadyPresent) return@collect
+
+                // Prepend the new transfer to the incoming list
+                _state.update { s ->
+                    s.copy(
+                        driverIncomingTransfers = listOf(matched) + s.driverIncomingTransfers
+                    )
+                }
+                Log.d(TAG, "Incoming transfer received: ${matched.transferId}")
+            }
+        }
     }
 
     /**

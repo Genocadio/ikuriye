@@ -94,7 +94,7 @@ class PackageSyncWorker(
                 Log.w(TAG, "Background sync failed to fetch — will retry")
                 Result.retry()
             } else {
-                Log.e(TAG, "Background sync failed after ${runAttemptCount} attempts")
+                Log.e(TAG, "Background sync failed after $runAttemptCount attempts")
                 Result.failure()
             }
         } catch (e: Exception) {

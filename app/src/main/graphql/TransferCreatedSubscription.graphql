@@ -1,0 +1,23 @@
+subscription TransferCreatedSubscription {
+    transferCreated {
+        transfer {
+            id
+            creatorId
+            ruleType
+            acceptorType
+            matchCompanyId
+            matchUserId
+            requestorId
+            status
+            packages {
+                id
+                transferId
+                packageId
+                addedBy
+                addedAt
+            }
+            createdAt
+            updatedAt
+        }
+    }
+}

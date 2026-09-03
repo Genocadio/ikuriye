@@ -233,7 +233,12 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                         }
                         Spacer(Modifier.width(8.dp))
                         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            listOf(0 to "Active", 1 to "New", 2 to "Transfers").forEach { (index, label) ->
+                            val tabIcons = listOf(
+                                0 to Icons.Filled.LocalShipping,
+                                1 to Icons.Filled.NewReleases,
+                                2 to Icons.AutoMirrored.Filled.CompareArrows
+                            )
+                            tabIcons.forEach { (index, icon) ->
                                 val selected = subTab == index
                                 val count    = when (index) {
                                     0 -> state.driverCurrentPackages.size
@@ -249,7 +254,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                     onClick = { if (!disabled) viewModel.setDriverPackageSubTab(index) }
                                 ) {
                                     Row(modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                                        Text(label, color = if (selected) Color.White else if (disabled) colors.textSecondary.copy(alpha = 0.5f) else colors.textSecondary, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                                        Icon(icon, null, modifier = Modifier.size(16.dp), tint = if (selected) Color.White else if (disabled) colors.textSecondary.copy(alpha = 0.5f) else colors.textSecondary)
                                         Spacer(Modifier.width(6.dp))
                                         Box(
                                             modifier = Modifier.widthIn(min = 20.dp).heightIn(min = 20.dp).clip(CircleShape)
@@ -622,8 +627,12 @@ fun DriverCurrentPackageCard(
                         Text(pkg.id, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         if (isTransferOpen) {
                             Spacer(Modifier.width(6.dp))
-                            Surface(shape = RoundedCornerShape(6.dp), color = colors.blue.copy(alpha = 0.12f)) {
-                                Text("Pending Transfer", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), color = colors.blue, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            Surface(shape = RoundedCornerShape(6.dp), color = colors.amber.copy(alpha = 0.12f)) {
+                                Row(modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.AutoMirrored.Filled.CompareArrows, null, modifier = Modifier.size(10.dp), tint = colors.amber)
+                                    Spacer(Modifier.width(3.dp))
+                                    Text("Outgoing", color = colors.amber, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
