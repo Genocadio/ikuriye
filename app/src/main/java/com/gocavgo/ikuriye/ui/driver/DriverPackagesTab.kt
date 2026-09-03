@@ -669,22 +669,25 @@ fun DriverCurrentPackageCard(
                             }
                         }
                     }
-                    // FIXED_ROUTE: Driver in transit, needs to mark arrival at destination office
+                    // FIXED_ROUTE: Driver in transit — transfer to office or arrive at destination
                     needsArrival -> {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = onArriveAtOffice,
                                 modifier = Modifier.weight(1f).heightIn(min = 38.dp),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = colors.green)
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.blue)
                             ) {
                                 Icon(Icons.Filled.LocationOn, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("Arrive at Office", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                             }
+                            OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
+                                Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                            }
                         }
                     }
-                    // FIXED_ROUTE: Arrived at destination — waiting for worker to mark ready
+                    // FIXED_ROUTE: Arrived at destination office — in office custody, driver done
                     isAtDestinationOffice -> {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
@@ -694,7 +697,7 @@ fun DriverCurrentPackageCard(
                             Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Filled.HourglassTop, null, tint = colors.blue, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("Awaiting office to make package ready for collection", color = colors.blue, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                Text("Package delivered to office — awaiting worker collection", color = colors.blue, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }

@@ -1344,6 +1344,12 @@ type Query {
   myTransfers: [Transfer!]!
 
   """
+  Get transfers targeted at the authenticated user (via matchUserId or matchCompanyId).
+  Shows PENDING transfers where the current user is the intended acceptor.
+  """
+  transfersForMe: [Transfer!]!
+
+  """
   Get transfers by status. Requires authentication.
   """
   transfersByStatus(status: TransferStatus!): [Transfer!]!
@@ -1779,6 +1785,11 @@ type User {
   ISO-8601 timestamp of last update
   """
   updatedAt: String!
+
+  """
+  Driver online/offline status - only populated for DRIVER-role users
+  """
+  driverStatus: String
 }
 
 """
