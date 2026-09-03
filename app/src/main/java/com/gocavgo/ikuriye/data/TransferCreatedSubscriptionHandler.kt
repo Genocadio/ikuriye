@@ -1,7 +1,7 @@
 package com.gocavgo.ikuriye.data
 
 import android.util.Log
-import com.gocavgo.ikuriye.TransferCreatedSubscriptionSubscription
+import com.gocavgo.ikuriye.TransferCreatedSubscription
 import com.gocavgo.ikuriye.network.ApolloClientProvider
 import com.gocavgo.ikuriye.nexx.NexxAuth
 import kotlinx.coroutines.CoroutineScope
@@ -104,7 +104,7 @@ object TransferCreatedSubscriptionHandler {
 
                 Log.d(TAG, "connecting subscription...")
                 ApolloClientProvider.client
-                    .subscription(TransferCreatedSubscriptionSubscription())
+                    .subscription(TransferCreatedSubscription())
                     .toFlow()
                     .collect { response ->
                         backoffMs = INITIAL_BACKOFF_MS
