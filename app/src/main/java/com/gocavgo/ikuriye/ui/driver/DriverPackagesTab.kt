@@ -85,13 +85,31 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
     val isRefreshing        = state.isRefreshingPackages
     val isDriverInitLoading = state.isDriverInitialLoading
     val isSelection         = state.isSelectionMode
-    val selectedIds         = state.selectedPackageIds
+    val selectedIds         = state.selectedPackageIds    // Exclude packages that are incoming transfers (from office) not yet accepted —
+    // these belong in the Transfers tab, not Active.
+    // Also exclude packages assigned by office but not yet picked up (ORIGIN_OFFICE / ASSIGNED_DRIVER).
+    val incomingPackageUuids = state.driverIncomingTransfers
+        .flatMap { it.packages.map { pkg -> pkg.packageUuid } }.toSet()
+    val NOT_PICKED_UP_BACKEND_STATUSES = setOf("ORIGIN_OFFICE", "ASSIGNED_DRIVER")
+
+    // Packages assigned by office but driver hasn't picked up yet → Transfers tab
+    val assignedToDriverPackages = state.driverCurrentPackages.filter {
+        it.backendStatus in NOT_PICKED_UP_BACKEND_STATUSES
+    }
 
     val filteredCurrent = state.driverCurrentPackages.filter {
-        searchQuery.isBlank() || it.id.contains(searchQuery, true) ||
-        it.description.contains(searchQuery, true) ||
-        it.toAddress.contains(searchQuery, true) || it.fromAddress.contains(searchQuery, true)
-    }.sortedByUnreadNotices(state.notices)
+        it.packageUuid !in incomingPackageUuids &&
+        it.backendStatus !in NOT_PICKED_UP_BACKEND_STATUSES &&
+        (searchQuery.isBlank() || it.id.contains(searchQuery, true) ||
+        it.description.contains(searchQuery, true) || it.toAddress.contains(searchQuery, true) || it.fromAddress.contains(searchQuery, true))
+    }.let { list ->
+        // Sort: in-progress (needs action) first, pending-confirmation / awaiting acceptance
+        // in the middle, delivered/cancelled last
+        val inProgress = list.filter { it.status != PackageStatus.DELIVERED && it.status != PackageStatus.CANCELLED && it.status != PackageStatus.PENDING_CONFIRMATION && !it.hasOpenTransfer }
+        val pendingAction = list.filter { it.status == PackageStatus.PENDING_CONFIRMATION || it.hasOpenTransfer }
+        val done = list.filter { it.status == PackageStatus.DELIVERED || it.status == PackageStatus.CANCELLED }
+        inProgress.sortedByUnreadNotices(state.notices) + pendingAction + done
+    }
     val filteredOffers = state.driverAvailableOffers.filter {
         searchQuery.isBlank() || it.id.contains(searchQuery, true) ||
         it.description.contains(searchQuery, true) ||
@@ -113,6 +131,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
         else -> GridCells.Fixed(1)
     }
 
+    // Combined transfers: explicit incoming transfers + packages assigned by office not yet picked up
     val filteredTransfers = state.driverIncomingTransfers
 
     val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
@@ -241,9 +260,9 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                             tabIcons.forEach { (index, icon) ->
                                 val selected = subTab == index
                                 val count    = when (index) {
-                                    0 -> state.driverCurrentPackages.size
+                                    0 -> filteredCurrent.size
                                     1 -> visibleOffers.size
-                                    else -> filteredTransfers.size
+                                    else -> filteredTransfers.size + assignedToDriverPackages.size
                                 }
                                 val disabled  = isSelection && index != 0
                                 Surface(
@@ -384,11 +403,14 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                             }
                         }
                         2 -> {
-                            // ── Transfers Tab: packages assigned by workers ──
-                            if (state.isLoadingTransfers && filteredTransfers.isEmpty()) {
+                            // ── Transfers Tab: packages assigned by office (not yet picked up) + explicit incoming transfers ──
+                            val hasTransfers = filteredTransfers.isNotEmpty()
+                            val hasAssigned = assignedToDriverPackages.isNotEmpty()
+                            val hasAny = hasTransfers || hasAssigned
+                            if (state.isLoadingTransfers && !hasAny) {
                                 ShimmerList(shimmerAlpha)
-                            } else if (filteredTransfers.isEmpty()) {
-                                EmptyPackagesState("No incoming transfers", "Packages transferred to you by workers will appear here")
+                            } else if (!hasAny) {
+                                EmptyPackagesState("No incoming packages", "Packages transferred to you will appear here")
                             } else {
                                 LazyColumn(
                                     state = remember { LazyListState() },
@@ -396,20 +418,35 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 90.dp),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    items(filteredTransfers, key = { it.transferId }) { matched ->
-                                        matched.packages.forEach { pkg ->
-                                            val acceptAction: () -> Unit = when (matched.ruleType) {
-                                                "SECURE" -> { { viewModel.openAcceptTransferCodeDialog(pkg.id, matched.transferId, "SECURE") } }
-                                                "CONFIRM" -> { { viewModel.openRequestTransferDialog(pkg.id, matched.transferId) } }
-                                                else -> { { viewModel.acceptIncomingTransfer(matched.transferId, pkg.id) } }
-                                            }
-                                            DriverTransferCard(
+                                    // ── Assigned by office, not yet picked up ──
+                                    if (hasAssigned) {
+                                        items(assignedToDriverPackages, key = { "assigned-${it.id}" }) { pkg ->
+                                            DriverAssignedCard(
                                                 pkg = pkg,
-                                                transferId = matched.transferId,
-                                                ruleType = matched.ruleType,
-                                                onAccept = acceptAction,
-                                                onDetail = { viewModel.openPackageDetail(pkg.id) }
+                                                onPickup = { viewModel.pickupPackage(pkg.id) },
+                                                onDetail = { viewModel.openPackageDetail(pkg.id) },
+                                                onTransfer = { viewModel.openTransferDialog(pkg.id) },
+                                                notices = state.notices
                                             )
+                                        }
+                                    }
+                                    // ── Explicit incoming transfers from workers ──
+                                    if (hasTransfers) {
+                                        items(filteredTransfers, key = { it.transferId }) { matched ->
+                                            matched.packages.forEach { pkg ->
+                                                val acceptAction: () -> Unit = when (matched.ruleType) {
+                                                    "SECURE" -> { { viewModel.openAcceptTransferCodeDialog(pkg.id, matched.transferId, "SECURE") } }
+                                                    "CONFIRM" -> { { viewModel.openRequestTransferDialog(pkg.id, matched.transferId) } }
+                                                    else -> { { viewModel.acceptIncomingTransfer(matched.transferId, pkg.id) } }
+                                                }
+                                                DriverTransferCard(
+                                                    pkg = pkg,
+                                                    transferId = matched.transferId,
+                                                    ruleType = matched.ruleType,
+                                                    onAccept = acceptAction,
+                                                    onDetail = { viewModel.openPackageDetail(pkg.id) }
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -679,19 +716,33 @@ fun DriverCurrentPackageCard(
                     }
                     // FIXED_ROUTE: Driver in transit — deliver to receiver or transfer to next office
                     needsArrival -> {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (isPendingConfirmation) {
+                            // Delivery initiated — show only Enter Delivery Code button
                             Button(
                                 onClick = onDeliver,
-                                modifier = Modifier.weight(1f).heightIn(min = 38.dp),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 38.dp),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = colors.green)
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.blue)
                             ) {
-                                Icon(Icons.Filled.Check, null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Filled.Lock, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("Deliver to Receiver", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text("Enter Delivery Code", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                             }
-                            OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
-                                Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = onDeliver,
+                                    modifier = Modifier.weight(1f).heightIn(min = 38.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = colors.green)
+                                ) {
+                                    Icon(Icons.Filled.Check, null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Deliver", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                }
+                                OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
+                                    Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                                }
                             }
                         }
                     }
@@ -725,7 +776,7 @@ fun DriverCurrentPackageCard(
                                 );
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    if (isPendingConfirmation) "Enter Confirmation Code" else "Deliver",
+                                    if (isPendingConfirmation) "Enter Delivery Code" else "Deliver",
                                     fontSize = if (isPendingConfirmation) 11.sp else 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1
@@ -932,6 +983,93 @@ fun DriverTransferCard(
             }
             Button(onClick = onAccept, modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = colors.blue)) {
                 Icon(acceptIcon, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(acceptLabel, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+    if (showMedia) { MediaCarouselDialog(pkg.mediaUrls) { showMedia = false } }
+}
+
+// ── Assigned Package Card (office assigned, driver not yet picked up) ─────────
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun DriverAssignedCard(
+    pkg: ClientPackage,
+    onPickup: () -> Unit,
+    onDetail: () -> Unit,
+    onTransfer: () -> Unit = {},
+    notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
+) {
+    val colors = LocalDriversColors.current
+    val isUnread = pkg.hasUnreadNotices(notices)
+    var showMedia by remember { mutableStateOf(false) }
+
+    val statusColor = when (pkg.backendStatus) {
+        "ASSIGNED_DRIVER" -> colors.amber
+        "ORIGIN_OFFICE" -> colors.blue
+        else -> colors.textSecondary
+    }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surface,
+        border = BorderStroke(1.dp, colors.amber.copy(alpha = 0.3f)),
+        shadowElevation = 2.dp
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(statusColor.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.LocalShipping, null, tint = statusColor, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isUnread) {
+                            val dotTransition = rememberInfiniteTransition(label = "unread")
+                            val dotAlpha by dotTransition.animateFloat(
+                                initialValue = 0.35f, targetValue = 1f,
+                                animationSpec = infiniteRepeatable(tween(800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                                label = "dotAlpha"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(colors.red.copy(alpha = dotAlpha))
+                            )
+                            Spacer(Modifier.width(5.dp))
+                        }
+                        Text(pkg.id, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                    TruncatedDescription(pkg.description)
+                }
+                Surface(shape = RoundedCornerShape(8.dp), color = colors.amber.copy(alpha = 0.12f)) {
+                    Text("ASSIGNED", modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = colors.amber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            AddressRow(Icons.Filled.MyLocation, colors.green, pkg.fromAddress)
+            Spacer(Modifier.height(4.dp))
+            AddressRow(Icons.Filled.LocationOn, colors.red, pkg.toAddress)
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (pkg.weight.isNotBlank()) { Icon(Icons.Filled.Scale, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text(pkg.weight, color = colors.textSecondary, fontSize = 11.sp) }
+                if (pkg.photoCount > 0) { Spacer(Modifier.width(12.dp)); Row(modifier = Modifier.clickable { showMedia = true }, verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Photo, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("${pkg.photoCount}", color = colors.textSecondary, fontSize = 11.sp) } }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDetail, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("Details", color = colors.blue, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onPickup,
+                    modifier = Modifier.weight(1f).heightIn(min = 38.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.blue)
+                ) {
+                    Icon(Icons.Filled.LocalShipping, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Pick Up Package", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                }
             }
         }
     }
