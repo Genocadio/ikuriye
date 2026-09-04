@@ -303,7 +303,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, onPickup = { viewModel.pickupPackage(pkg.id) }, onArriveAtOffice = { viewModel.arriveAtOffice(pkg.id) }, notices = state.notices)
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, onPickup = { viewModel.pickupPackage(pkg.id) }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -322,7 +322,7 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                         if (isSelection) {
                                             SelectableCurrentPackageCard(pkg = pkg, isSelected = pkg.id in selectedIds, canSelect = pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !isReq, onToggle = { viewModel.togglePackageSelection(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) })
                                         } else {
-                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, onPickup = { viewModel.pickupPackage(pkg.id) }, onArriveAtOffice = { viewModel.arriveAtOffice(pkg.id) }, notices = state.notices)
+                                            DriverCurrentPackageCard(pkg = pkg, onDeliver = { viewModel.openDeliverDialog(pkg.id) }, onTransfer = { viewModel.openTransferDialog(pkg.id) }, onDetail = { viewModel.openPackageDetail(pkg.id) }, onLongPress = { if (pkg.status != PackageStatus.DELIVERED && pkg.status != PackageStatus.CANCELLED && !pkg.hasOpenTransfer) { viewModel.startSelectionMode(pkg.id) } }, onPickup = { viewModel.pickupPackage(pkg.id) }, notices = state.notices)
                                         }
                                     }
                                     if (state.driverCurrentHasMore && !state.isLoadingMorePackages && !isRefreshing) {
@@ -572,7 +572,6 @@ fun DriverCurrentPackageCard(
     onDetail: () -> Unit,
     onLongPress: () -> Unit = {},
     onPickup: () -> Unit = {},
-    onArriveAtOffice: () -> Unit = {},
     notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
 ) {
     val colors = LocalDriversColors.current
@@ -678,18 +677,18 @@ fun DriverCurrentPackageCard(
                             }
                         }
                     }
-                    // FIXED_ROUTE: Driver in transit — transfer to office or arrive at destination
+                    // FIXED_ROUTE: Driver in transit — deliver to receiver or transfer to next office
                     needsArrival -> {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
-                                onClick = onArriveAtOffice,
+                                onClick = onDeliver,
                                 modifier = Modifier.weight(1f).heightIn(min = 38.dp),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = colors.blue)
+                                colors = ButtonDefaults.buttonColors(containerColor = colors.green)
                             ) {
-                                Icon(Icons.Filled.LocationOn, null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Filled.Check, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("Arrive at Office", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text("Deliver to Receiver", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                             }
                             OutlinedButton(onClick = onTransfer, modifier = Modifier.weight(1f).heightIn(min = 38.dp), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, colors.divider)) {
                                 Icon(Icons.Filled.MoveToInbox, null, modifier = Modifier.size(16.dp), tint = colors.amber); Spacer(Modifier.width(6.dp)); Text("Transfer to Office", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)

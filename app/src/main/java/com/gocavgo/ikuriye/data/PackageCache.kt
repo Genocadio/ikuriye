@@ -271,6 +271,7 @@ object PackageCache {
             put("photoCount", pkg.photoCount)
             put("mediaUrls", mediaArr)
             put("status", pkg.status.name)
+            put("deliveryType", pkg.deliveryType)
             put("driverName", pkg.driverName)
             put("driverPhone", pkg.driverPhone)
             put("driverCompany", pkg.driverCompany)
@@ -284,6 +285,7 @@ object PackageCache {
             if (pkg.transferStatus != null) put("transferStatus", pkg.transferStatus)
             if (pkg.transferRuleType != null) put("transferRuleType", pkg.transferRuleType)
             if (pkg.packageUuid.isNotBlank()) put("packageUuid", pkg.packageUuid)
+            if (pkg.backendStatus.isNotBlank()) put("backendStatus", pkg.backendStatus)
             if (pkg.transfers.isNotEmpty()) {
                 val transfersArr = JSONArray()
                 pkg.transfers.forEach { t ->
@@ -350,6 +352,7 @@ object PackageCache {
             photoCount = json.optInt("photoCount", 0),
             mediaUrls = mediaUrls,
             status = try { PackageStatus.valueOf(json.optString("status", "PENDING")) } catch (_: Exception) { PackageStatus.PENDING },
+            deliveryType = json.optString("deliveryType", "FIXED_ROUTE"),
             driverName = json.optString("driverName", ""),
             driverPhone = json.optString("driverPhone", ""),
             driverCompany = json.optString("driverCompany", ""),
@@ -363,6 +366,7 @@ object PackageCache {
             transferStatus = json.optString("transferStatus", "").ifBlank { null },
             transferRuleType = json.optString("transferRuleType", "").ifBlank { null },
             packageUuid = json.optString("packageUuid", ""),
+            backendStatus = json.optString("backendStatus", ""),
             transfers = run {
                 val arr = json.optJSONArray("transfers")
                 if (arr != null) {

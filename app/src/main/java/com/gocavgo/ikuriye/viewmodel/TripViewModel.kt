@@ -982,36 +982,6 @@ class TripViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Driver arrives at destination office: transitions IN_TRANSIT → DESTINATION_OFFICE.
-     * Used for FIXED_ROUTE packages when the driver reaches the destination office.
-     */
-    fun arriveAtOffice(packageId: String) {
-        val pkg = _state.value.driverCurrentPackages.find { it.id == packageId } ?: return
-        if (pkg.packageUuid.isBlank()) {
-            viewModelScope.launch { _toastEvent.emit("Missing package UUID") }
-            return
-        }
-        viewModelScope.launch {
-            val result = PackageRepository.updatePackageStatus(pkg.packageUuid, "DESTINATION_OFFICE", "Arrived at destination office")
-            if (result != null) {
-                _state.update { s ->
-                    s.copy(
-                        driverCurrentPackages = s.driverCurrentPackages.map {
-                            if (it.id == packageId) it.copy(
-                                status = PackageStatus.ARRIVED_AT_OFFICE,
-                                backendStatus = "DESTINATION_OFFICE"
-                            ) else it
-                        }
-                    )
-                }
-                _toastEvent.emit("Arrived at destination office — waiting for worker to make package ready")
-            } else {
-                _toastEvent.emit("Failed to mark arrival")
-            }
-        }
-    }
-
     fun confirmTransfer() {
         val s = _state.value
         val pkg = s.driverCurrentPackages.find { it.id == s.selectedDriverPackageId } ?: return
