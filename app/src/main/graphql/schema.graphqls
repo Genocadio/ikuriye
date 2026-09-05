@@ -435,7 +435,8 @@ Delivery type for a package.
 """
 enum DeliveryType {
   """
-  Open delivery — flexible status transitions (CREATED → ACCEPTED → PICKED_UP → IN_TRANSIT → PENDING_CONFIRMATION → DELIVERED → COMPLETED)
+  Open delivery — flexible status transitions (CREATED → ACCEPTED/PICKED_UP → IN_TRANSIT → PENDING_CONFIRMATION → DELIVERED → COMPLETED).
+  Driver accepts from sender directly → PICKED_UP. Worker accepts → ACCEPTED.
   """
   OPEN
 
