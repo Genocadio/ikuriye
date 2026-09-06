@@ -66,6 +66,9 @@ fun FloatingCreatePanel(
     formState: CreatePackageFormState,
     onFormFieldChange: (String, String) -> Unit,
     onFragileChange: (Boolean) -> Unit,
+    onOriginLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
+    onDestLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
+    onSearchLocations: (String) -> Unit = {},
     showSenderFields: Boolean = false,
     isSubmitting: Boolean = false,
     userSearchResults: List<SearchUsersQuery.SearchUser> = emptyList(),
@@ -355,6 +358,9 @@ fun FloatingCreatePanel(
                                 formState = formState,
                                 onFormFieldChange = onFormFieldChange,
                                 onFragileChange = onFragileChange,
+                                onOriginLocationSelect = onOriginLocationSelect,
+                                onDestLocationSelect = onDestLocationSelect,
+                                onSearchLocations = onSearchLocations,
                                 currentStep = currentStep,
                                 onStepChange = { step ->
                                     currentStep = step

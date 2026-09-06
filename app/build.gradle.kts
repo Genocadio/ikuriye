@@ -72,7 +72,12 @@ android {
         // Supabase is used for FILE UPLOADS ONLY — auth is handled by Nexxauth.
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "")}\"")
         buildConfigField("String", "SUPABASE_KEY", "\"${secret("SUPABASE_KEY", "")}\"")
-        buildConfigField("String", "GRAPHQL_URL", "\"${secret("GRAPHQL_URL", "https://api.med.rw/deliveries/graphql")}\"")
+        buildConfigField("String", "GRAPHQL_URL", "\"${secret("GRAPHQL_URL", "https://api.med.rw/gocavgo/ikuriye/graphql")}\"")
+        // Base URL for REST endpoints (location search, file upload) served by the gateway.
+        // Derived by stripping the /ikuriye/graphql suffix from GRAPHQL_URL.
+        val restBaseUrl = secret("GRAPHQL_URL", "https://api.med.rw/gocavgo/ikuriye/graphql")
+            .removeSuffix("/ikuriye/graphql")
+        buildConfigField("String", "REST_BASE_URL", "\"${restBaseUrl}\"")
         buildConfigField("String", "MEDIA_BUCKET", "\"${secret("MEDIA_BUCKET", "package-media")}\"")
         buildConfigField("String", "PROFILE_BUCKET", "\"${secret("PROFILE_BUCKET", "profiles")}\"")
         // Nexxauth — identity provider. Base URL includes the platform slug:
@@ -179,6 +184,10 @@ dependencies {
     // ── Google Play Services Location (FusedLocationProviderClient) ───────
     // Works on low-end devices; handles GPS, network, and passive providers
     implementation("com.google.android.gms:play-services-location:21.4.0")
+
+    // ── Paho MQTT Client — publishes GPS location to HiveMQ broker ──────
+    implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+    implementation("org.eclipse.paho:org.eclipse.paho.android.service:1.1.1")
 
     // ── Fragment (explicit dep for ActivityResultContracts compat) ──────
     implementation(libs.androidx.fragment.ktx)

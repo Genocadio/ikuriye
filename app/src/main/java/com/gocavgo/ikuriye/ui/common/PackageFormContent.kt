@@ -77,6 +77,9 @@ fun PackageFormContent(
     formState: CreatePackageFormState,
     onFormFieldChange: (String, String) -> Unit,
     onFragileChange: (Boolean) -> Unit,
+    onOriginLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
+    onDestLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
+    onSearchLocations: (String) -> Unit = {},
     currentStep: Int,
     onStepChange: (Int) -> Unit,
     stepIsValid: Boolean,
@@ -216,30 +219,9 @@ fun PackageFormContent(
     }
     val filteredCategories = remember(formState.category) { allCategories.filter { it.contains(formState.category, ignoreCase = true) } }
 
-    val rwandaLocations = remember {
-        listOf(
-            "Kicukiro, Kigali", "Nyarugenge, Kigali", "Remera, Kigali", "Kimironko, Kigali",
-            "Nyabugogo, Kigali", "Gikondo, Kigali", "Kanombe, Kigali", "Niboye, Kigali",
-            "Gatenga, Kigali", "Gahanga, Kigali", "Kabeza, Kigali", "Nyamirambo, Kigali",
-            "Kimisagara, Kigali", "Muhima, Kigali", "Nyakabanda, Kigali", "Kiyovu, Kigali",
-            "Rugando, Kigali", "Kacyiru, Kigali", "Gisozi, Kigali", "Kibagabaga, Kigali",
-            "Kimihurura, Kigali", "Nyarutarama, Kigali", "Kagarama, Kigali", "Biryogo, Kigali",
-            "Busanza, Kigali", "Giporoso, Kigali", "Kicukiro Center, Kigali",
-            "Musanze Town", "Ruhengeri, Musanze", "Kinigi, Musanze",
-            "Byumba, Gicumbi", "Rulindo Town", "Burera", "Gakenke",
-            "Cyumba, Gicumbi", "Miyove, Gicumbi", "Nemba, Gicumbi",
-            "Huye Town", "Butare, Huye", "Nyanza Town", "Nyamagabe",
-            "Gisagara", "Muhanga Town", "Ruhango", "Kamonyi",
-            "Rubavu Town", "Gisenyi, Rubavu", "Rusizi Town", "Kamembe, Rusizi",
-            "Karongi Town", "Kibuye, Karongi", "Nyamasheke", "Rutsiro",
-            "Ngororero", "Nyabihu", "Rwamagana Town", "Nyagatare Town",
-            "Bugesera", "Ngoma Town", "Kayonza Town", "Gatsibo", "Kirehe",
-            "Akagera National Park", "Volcanoes National Park", "Nyungwe National Park",
-            "Lake Kivu", "Lake Muhazi", "Lake Burera", "Lake Ruhondo"
-        ).distinct()
-    }
-    val filteredFrom = remember(formState.fromAddress) { rwandaLocations.filter { it.contains(formState.fromAddress, ignoreCase = true) } }
-    val filteredTo   = remember(formState.toAddress)   { rwandaLocations.filter { it.contains(formState.toAddress, ignoreCase = true) } }
+    // Location search results from cavgotrips (via ViewModel/API)
+    val locationResults = formState.locationSearchResults
+    val isSearchingLocations = formState.isSearchingLocations
 
     // ── Validation per step (progressive — only validates what's been revealed) ──
     val locationRevealStage = when {
@@ -312,6 +294,9 @@ fun PackageFormContent(
                         0 -> LocationStep(
                             formState = formState,
                             onFormFieldChange = onFormFieldChange,
+                            onOriginLocationSelect = onOriginLocationSelect,
+                            onDestLocationSelect = onDestLocationSelect,
+                            onSearchLocations = onSearchLocations,
                             showSenderFields = showSenderFields,
                             userSearchResults = userSearchResults,
                             onUserSearch = onUserSearch,
@@ -320,8 +305,6 @@ fun PackageFormContent(
                             onToggleRecipientSearch = { showFromRecipientDropdown = it },
                             showFromDropdown = showFromDropdown,
                             showToDropdown = showToDropdown,
-                            filteredFrom = filteredFrom,
-                            filteredTo = filteredTo,
                             onShowFromDropdown = { showFromDropdown = it; if (it) showToDropdown = false },
                             onShowToDropdown = { showToDropdown = it; if (it) showFromDropdown = false },
                             locationRevealStage = locationRevealStage,
@@ -490,6 +473,9 @@ fun IconsStepIndicator(
 private fun LocationStep(
     formState: CreatePackageFormState,
     onFormFieldChange: (String, String) -> Unit,
+    onOriginLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit,
+    onDestLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit,
+    onSearchLocations: (String) -> Unit,
     showSenderFields: Boolean,
     userSearchResults: List<SearchUsersQuery.SearchUser>,
     onUserSearch: (String) -> Unit,
@@ -498,8 +484,6 @@ private fun LocationStep(
     onToggleRecipientSearch: (Boolean) -> Unit,
     showFromDropdown: Boolean,
     showToDropdown: Boolean,
-    filteredFrom: List<String>,
-    filteredTo: List<String>,
     onShowFromDropdown: (Boolean) -> Unit,
     onShowToDropdown: (Boolean) -> Unit,
     locationRevealStage: Int,
@@ -598,21 +582,36 @@ private fun LocationStep(
         }
     }
 
+    // Location search results from cavgotrips API
+    val locationResults = formState.locationSearchResults
+    val isSearchingLocations = formState.isSearchingLocations
+
     // ── Stage 1: Pickup location ──
     FormLabel("Pickup location")
-    CompactLocationField(
+    LocationSearchField(
         value = formState.fromAddress,
         isEditing = editingFrom,
         icon = { Icon(Icons.Filled.MyLocation, null, tint = colors.green) },
         placeholder = if (hasSender) "From where?" else "Pickup location *",
         showDropdown = showFromDropdown,
-        filteredOptions = filteredFrom,
+        searchResults = locationResults,
+        isSearching = isSearchingLocations,
         onValueChange = { v ->
             onFormFieldChange("fromAddress", v)
+            onSearchLocations(v)
             if (v.isNotBlank()) onShowFromDropdown(true)
         },
-        onFocusChange = { if (it) { onShowFromDropdown(true); onShowToDropdown(false) } },
-        onSelectOption = { loc -> onFormFieldChange("fromAddress", loc); onShowFromDropdown(false); editingFrom = false },
+        onFocusChange = { if (it) { onShowFromDropdown(true); onShowToDropdown(false); onSearchLocations(formState.fromAddress) } },
+        onSelectResult = { loc ->
+            onOriginLocationSelect(loc)
+            onShowFromDropdown(false)
+            editingFrom = false
+        },
+        onSelectManual = { name ->
+            onFormFieldChange("fromAddress", name)
+            onShowFromDropdown(false)
+            editingFrom = false
+        },
         onExpand = { editingFrom = true },
         isError = showErrors && formState.fromAddress.isBlank(),
         errorText = if (showErrors && formState.fromAddress.isBlank()) "Pickup location is required" else null,
@@ -706,24 +705,35 @@ private fun LocationStep(
         Column {
             Spacer(Modifier.height(8.dp))
             FormLabel("Delivery location")
-            CompactLocationField(
+            LocationSearchField(
                 value = formState.toAddress,
                 isEditing = editingTo,
                 icon = { Icon(Icons.Filled.LocationOn, null, tint = colors.red) },
                 placeholder = "Deliver to *",
                 showDropdown = showToDropdown,
-                filteredOptions = filteredTo,
+                searchResults = locationResults,
+                isSearching = isSearchingLocations,
                 onValueChange = { v ->
                     onFormFieldChange("toAddress", v)
+                    onSearchLocations(v)
                     if (v.isNotBlank()) onShowToDropdown(true)
                 },
-                onFocusChange = { if (it) { onShowToDropdown(true); onShowFromDropdown(false) } },
-        onSelectOption = { loc -> onFormFieldChange("toAddress", loc); onShowToDropdown(false); editingTo = false },
-        onExpand = { editingTo = true },
-        isError = showErrors && formState.toAddress.isBlank(),
-        errorText = if (showErrors && formState.toAddress.isBlank()) "Delivery location is required" else null,
-        colors = colors
-    )
+                onFocusChange = { if (it) { onShowToDropdown(true); onShowFromDropdown(false); onSearchLocations(formState.toAddress) } },
+                onSelectResult = { loc ->
+                    onDestLocationSelect(loc)
+                    onShowToDropdown(false)
+                    editingTo = false
+                },
+                onSelectManual = { name ->
+                    onFormFieldChange("toAddress", name)
+                    onShowToDropdown(false)
+                    editingTo = false
+                },
+                onExpand = { editingTo = true },
+                isError = showErrors && formState.toAddress.isBlank(),
+                errorText = if (showErrors && formState.toAddress.isBlank()) "Delivery location is required" else null,
+                colors = colors
+            )
             // When delivery location gains focus & phone is filled → collapse phone
             LaunchedEffect(showToDropdown) {
                 if (showToDropdown && formState.recipientPhone.isNotBlank()) {
@@ -1191,6 +1201,125 @@ private fun CompactLocationField(
             }
         } else {
             // ── Compact: clickable chip showing the selected value ──
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surface,
+                border = BorderStroke(1.dp, if (isError && value.isBlank()) colors.red else colors.divider),
+                onClick = onExpand
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    icon()
+                    Spacer(Modifier.width(12.dp))
+                    Text(value, color = colors.textPrimary, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    Icon(Icons.Filled.Edit, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Location search field that fetches results from cavgotrips via the gateway.
+ * Shows API search results in a dropdown. Falls back to manual text entry.
+ */
+@Composable
+private fun LocationSearchField(
+    value: String,
+    isEditing: Boolean,
+    icon: @Composable () -> Unit,
+    placeholder: String,
+    showDropdown: Boolean,
+    searchResults: List<com.gocavgo.ikuriye.viewmodel.LocationSearchResult>,
+    isSearching: Boolean,
+    onValueChange: (String) -> Unit,
+    onFocusChange: (Boolean) -> Unit,
+    onSelectResult: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit,
+    onSelectManual: (String) -> Unit,
+    onExpand: () -> Unit,
+    isError: Boolean = false,
+    errorText: String? = null,
+    colors: com.gocavgo.ikuriye.ui.theme.DriversColors
+) {
+    Box {
+        if (isEditing || value.isBlank()) {
+            FormTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.fillMaxWidth().onFocusChanged { onFocusChange(it.isFocused) },
+                label = placeholder,
+                customLeadingIcon = icon,
+                singleLine = true,
+                isError = isError,
+                errorText = errorText,
+                colors = colors
+            )
+            if (showDropdown && (searchResults.isNotEmpty() || isSearching)) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.surface,
+                    border = BorderStroke(1.dp, colors.divider),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                ) {
+                    Column(Modifier.padding(vertical = 4.dp)) {
+                        if (isSearching && searchResults.isEmpty()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Searching…", color = colors.textSecondary, fontSize = 13.sp)
+                            }
+                        }
+                        searchResults.forEach { loc ->
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 1.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = colors.surface,
+                                onClick = { onSelectResult(loc) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Filled.Place, null, tint = colors.green, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(loc.displayName(), color = colors.textPrimary, fontSize = 14.sp)
+                                        val sub = loc.subtitle()
+                                        if (sub.isNotBlank()) {
+                                            Text(sub, color = colors.textSecondary, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Allow manual entry if no results
+                        if (!isSearching && searchResults.isEmpty() && value.isNotBlank()) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 1.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = colors.surface,
+                                onClick = { onSelectManual(value) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Filled.Edit, null, tint = colors.blue, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(10.dp))
+                                    Text("Use \"$value\" as entered", color = colors.blue, fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),

@@ -3,12 +3,27 @@ package com.gocavgo.ikuriye.viewmodel
 import com.gocavgo.ikuriye.SearchUsersQuery
 import com.gocavgo.ikuriye.data.ClientPackage
 import com.gocavgo.ikuriye.data.ClientUser
-import com.gocavgo.ikuriye.data.DummyTrip
 import com.gocavgo.ikuriye.data.Trip
+import com.gocavgo.ikuriye.network.BackendStorage
 import com.gocavgo.ikuriye.data.dto.AuthResult
 import com.gocavgo.ikuriye.data.dto.AuthUserDto
 
 // ── Domain models ─────────────────────────────────────────────────────────────
+
+data class LocationSearchResult(
+    val id: Long,
+    val latitude: Double,
+    val longitude: Double,
+    val customName: String?,
+    val googlePlaceName: String?,
+    val province: String?,
+    val district: String?,
+    val placeId: String?,
+    val code: String?
+) {
+    fun displayName(): String = customName ?: googlePlaceName ?: code ?: "Location #$id"
+    fun subtitle(): String = listOfNotNull(district, province).joinToString(", ")
+}
 
 data class CreatePackageFormState(
     val senderName: String = "",
@@ -20,14 +35,24 @@ data class CreatePackageFormState(
     val description: String = "",
     val weight: String = "",
     val category: String = "",
-    val isFragile: Boolean = false
+    val isFragile: Boolean = false,
+    // Location search results from cavgotrips
+    val locationSearchResults: List<LocationSearchResult> = emptyList(),
+    val isSearchingLocations: Boolean = false,
+    // Coordinates from selected locations (populated when user picks a search result)
+    val originLatitude: Double = 0.0,
+    val originLongitude: Double = 0.0,
+    val originPlaceId: String? = null,
+    val destLatitude: Double = 0.0,
+    val destLongitude: Double = 0.0,
+    val destPlaceId: String? = null
 ) {
     fun updateField(field: String, value: String): CreatePackageFormState {
         return when (field) {
             "senderName" -> copy(senderName = value)
             "senderPhone" -> copy(senderPhone = value)
-            "fromAddress" -> copy(fromAddress = value)
-            "toAddress" -> copy(toAddress = value)
+            "fromAddress" -> copy(fromAddress = value, originLatitude = 0.0, originLongitude = 0.0, originPlaceId = null)
+            "toAddress" -> copy(toAddress = value, destLatitude = 0.0, destLongitude = 0.0, destPlaceId = null)
             "recipientName" -> copy(recipientName = value)
             "recipientPhone" -> copy(recipientPhone = value)
             "description" -> copy(description = value)
@@ -35,6 +60,26 @@ data class CreatePackageFormState(
             "category" -> copy(category = value)
             else -> this
         }
+    }
+
+    /** Called when user selects a location from the API search results. */
+    fun withOriginLocation(loc: LocationSearchResult): CreatePackageFormState {
+        return copy(
+            fromAddress = loc.displayName(),
+            originLatitude = loc.latitude,
+            originLongitude = loc.longitude,
+            originPlaceId = loc.placeId
+        )
+    }
+
+    /** Called when user selects a destination location from the API search results. */
+    fun withDestLocation(loc: LocationSearchResult): CreatePackageFormState {
+        return copy(
+            toAddress = loc.displayName(),
+            destLatitude = loc.latitude,
+            destLongitude = loc.longitude,
+            destPlaceId = loc.placeId
+        )
     }
 }
 
@@ -106,24 +151,25 @@ data class TripUiState(
     val driverProfile: DriverProfile = DriverProfile(),
     val vehicle: DriverVehicle = DriverVehicle(),
     val completedTrips: List<CompletedTrip> = emptyList(),
-    val driverCompletedTrips: List<CompletedTrip> = listOf(
-        CompletedTrip("Musanze Depot", "Kigali Hub", "RAC 482K"),
-        CompletedTrip("Nyabugogo", "Huye Terminal", "RAE 119P"),
-        CompletedTrip("Rubavu Station", "Kigali Hub", "RAD 774B")
-    ),
+    val driverCompletedTrips: List<CompletedTrip> = emptyList(),
     val driverHomeTab: Int = 0,
     val defaultPage: String = "trips",
     val keepScreenAwake: Boolean = false,
     val isDriverCreatingPackage: Boolean = false,
     val isDriverProfileMenuOpen: Boolean = false,
     val isDriverSettingsOpen: Boolean = false,
-    // Trip state
-    val trip: Trip = DummyTrip.trip,
+    // Trip state (real backend data)
+    val trip: Trip = Trip(id = "", routeLabel = "", stops = emptyList()),
     val currentStopIndex: Int = 0,
     val arrivedAtStop: Boolean = false,
     val tripCompleted: Boolean = false,
-    val hasActiveTrip: Boolean = true,
+    val hasActiveTrip: Boolean = false,
     val driverLocation: DriverLocation = DriverLocation(),
+    // Real driver trips from cavgotrips
+    val activeDriverTrip: BackendStorage.DriverTrip? = null,
+    val driverTripHistory: List<BackendStorage.DriverTrip> = emptyList(),
+    val driverMetrics: BackendStorage.DriverMetrics? = null,
+    val isLoadingDriverTrips: Boolean = false,
     // Settings
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val isPipEnabled: Boolean = false,

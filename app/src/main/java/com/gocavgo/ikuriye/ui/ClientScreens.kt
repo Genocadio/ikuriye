@@ -140,6 +140,9 @@ fun CreatePackageScreen(
     formState: CreatePackageFormState = CreatePackageFormState(),
     onFormFieldChange: (String, String) -> Unit = { _, _ -> },
     onFragileChange: (Boolean) -> Unit = {},
+    onOriginLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
+    onDestLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
+    onSearchLocations: (String) -> Unit = {},
     showSenderFields: Boolean = false,
     isSubmitting: Boolean = false,
     userSearchResults: List<SearchUsersQuery.SearchUser> = emptyList(),
@@ -149,7 +152,7 @@ fun CreatePackageScreen(
     onAddMedia: (String, ByteArray, String) -> Unit = { _, _, _ -> },
     onCancelUpload: (String) -> Unit = {},
     onRemoveMedia: (String) -> Unit = {}
-) = CreatePackageScreenImpl(onBack, onSubmit, formState, onFormFieldChange, onFragileChange, showSenderFields, isSubmitting, userSearchResults, onUserSearch, onClearUserSearch, mediaUploads, onAddMedia, onCancelUpload, onRemoveMedia)
+) = CreatePackageScreenImpl(onBack, onSubmit, formState, onFormFieldChange, onFragileChange, onOriginLocationSelect, onDestLocationSelect, onSearchLocations, showSenderFields, isSubmitting, userSearchResults, onUserSearch, onClearUserSearch, mediaUploads, onAddMedia, onCancelUpload, onRemoveMedia)
 
 @Composable
 fun TrackPackageScreen(

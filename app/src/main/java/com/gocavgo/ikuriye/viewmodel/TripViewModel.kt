@@ -33,6 +33,7 @@ import com.gocavgo.ikuriye.type.LocationType
 import com.gocavgo.ikuriye.type.PersonInput
 import com.gocavgo.ikuriye.type.PersonRole
 import com.apollographql.apollo.api.Optional
+import com.gocavgo.ikuriye.data.Trip
 import com.gocavgo.ikuriye.data.TripStop
 import com.gocavgo.ikuriye.data.dto.AuthResult
 import com.gocavgo.ikuriye.data.dto.AuthUserDto
@@ -41,6 +42,9 @@ import com.gocavgo.ikuriye.data.dto.SignUpInput
 import com.gocavgo.ikuriye.SearchUsersQuery
 import com.gocavgo.ikuriye.nexx.NexxAuth
 import com.gocavgo.ikuriye.network.ApolloClientProvider
+import com.gocavgo.ikuriye.network.BackendStorage
+import com.gocavgo.ikuriye.service.MqttLocationPublisher
+import com.gocavgo.ikuriye.service.LocationKeepaliveWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -261,7 +265,15 @@ class TripViewModel : ViewModel() {
             .filter { it.isNotBlank() }
             .joinToString(" ")
             .ifBlank { "" }
-        
+
+        // Wire up MQTT publisher with user identity for all logged-in users
+        MqttLocationPublisher.userId = user.id
+
+        // Schedule WorkManager keepalive to restart LocationService if OEM kills it
+        AuthRepository.getAppContext()?.let { ctx ->
+            LocationKeepaliveWorker.schedule(ctx)
+        }
+
         when (user.role.name) {
             "DRIVER" -> {
                 _state.update {
@@ -281,6 +293,8 @@ class TripViewModel : ViewModel() {
                 // Pre-load cached packages in background so they're ready
                 // the moment the user opens the Packages tab
                 preloadDriverPackages()
+                // Load real trips from cavgotrips (active + history)
+                loadDriverTrips()
                 // Start real-time subscription for new package transfers
                 startPackageSubscription()
             }
@@ -484,14 +498,16 @@ class TripViewModel : ViewModel() {
         stopPackageSubscription()
         autoShownDeliveryNotices.clear()
         ApolloClientProvider.resetClient()
+        MqttLocationPublisher.disconnect()
         viewModelScope.launch {
             AuthRepository.signOut()
         }
         SettingsRepository.clear()
         PackageCache.clear()
-        // Cancel background sync worker
+        // Cancel background sync + keepalive workers
         AuthRepository.getAppContext()?.let { ctx ->
             com.gocavgo.ikuriye.service.PackageSyncWorker.cancel(ctx)
+            LocationKeepaliveWorker.cancel(ctx)
         }
         _state.update {
             it.copy(
@@ -1131,6 +1147,7 @@ class TripViewModel : ViewModel() {
         NoticeRepository.stop()
         autoShownDeliveryNotices.clear()
         ApolloClientProvider.resetClient()
+        MqttLocationPublisher.disconnect()
         viewModelScope.launch {
             AuthRepository.signOut()
         }
@@ -1139,6 +1156,7 @@ class TripViewModel : ViewModel() {
         // Cancel background sync worker
         AuthRepository.getAppContext()?.let { ctx ->
             com.gocavgo.ikuriye.service.PackageSyncWorker.cancel(ctx)
+            LocationKeepaliveWorker.cancel(ctx)
         }
         _state.update {
             it.copy(
@@ -1295,18 +1313,21 @@ class TripViewModel : ViewModel() {
                 phone = if (pkg.recipientPhone.isNotBlank()) Optional.present(pkg.recipientPhone) else Optional.absent()
             )
 
+            val formState = _state.value.createPackageForm
             val origin = LocationInput(
                 type = LocationType.ORIGIN,
-                latitude = 0.0,
-                longitude = 0.0,
-                placeName = if (pkg.fromAddress.isNotBlank()) Optional.present(pkg.fromAddress) else Optional.absent()
+                latitude = formState.originLatitude,
+                longitude = formState.originLongitude,
+                placeName = if (pkg.fromAddress.isNotBlank()) Optional.present(pkg.fromAddress) else Optional.absent(),
+                placeId = if (formState.originPlaceId != null) Optional.present(formState.originPlaceId) else Optional.absent()
             )
 
             val destination = LocationInput(
                 type = LocationType.DESTINATION,
-                latitude = 0.0,
-                longitude = 0.0,
-                placeName = if (pkg.toAddress.isNotBlank()) Optional.present(pkg.toAddress) else Optional.absent()
+                latitude = formState.destLatitude,
+                longitude = formState.destLongitude,
+                placeName = if (pkg.toAddress.isNotBlank()) Optional.present(pkg.toAddress) else Optional.absent(),
+                placeId = if (formState.destPlaceId != null) Optional.present(formState.destPlaceId) else Optional.absent()
             )
 
             val weightStr = pkg.weight.trim()
@@ -1780,6 +1801,103 @@ class TripViewModel : ViewModel() {
             // Preload incoming transfers in background
             loadDriverIncomingTransfers()
         }
+    }
+
+    /**
+     * Load real driver trips from cavgotrips via the gateway.
+     * Called on login and whenever the driver trip list needs refreshing.
+     * Fetches the active trip (SCHEDULED or IN_PROGRESS) and recent history.
+     */
+    fun loadDriverTrips() {
+        viewModelScope.launch {
+            val userId = _state.value.authUser?.id?.toLongOrNull() ?: return@launch
+            _state.update { it.copy(isLoadingDriverTrips = true) }
+            try {
+                // Fetch driver profile + assigned vehicle from cavgomain
+                val worker = BackendStorage.fetchDriverWorker(userId)
+                if (worker != null) {
+                    val v = worker.vehicle
+                    _state.update {
+                        it.copy(
+                            driverProfile = it.driverProfile.copy(
+                                name = worker.name.ifBlank { it.driverProfile.name },
+                                phone = worker.phone ?: it.driverProfile.phone,
+                                email = worker.email ?: it.driverProfile.email
+                            ),
+                            vehicle = if (v != null) DriverVehicle(
+                                plateNumber = v.licensePlate ?: it.vehicle.plateNumber,
+                                model = listOfNotNull(v.make, v.model).joinToString(" ").ifBlank { it.vehicle.model },
+                                seats = v.capacity.takeIf { it > 0 } ?: it.vehicle.seats
+                            ) else it.vehicle
+                        )
+                    }
+                    // Set vehicle ID for MQTT publishing (publishes to vehicles/{carId}/location/batch)
+                    MqttLocationPublisher.vehicleId = worker.vehicle?.id?.toString()
+                }
+                // Fetch active trip (SCHEDULED or IN_PROGRESS)
+                val activeTrips = BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 1)
+                val activeTrip = activeTrips.trips.firstOrNull()
+                // Fetch completed trips for history
+                val historyTrips = BackendStorage.fetchDriverTrips(userId, "COMPLETED", limit = 20)
+                _state.update {
+                    it.copy(
+                        activeDriverTrip = activeTrip,
+                        driverTripHistory = historyTrips.trips,
+                        driverMetrics = activeTrips.metrics ?: historyTrips.metrics,
+                        hasActiveTrip = activeTrip != null,
+                        isLoadingDriverTrips = false,
+                        // Map active trip to real Trip model for existing UI components
+                        trip = if (activeTrip != null) mapBackendTripToTrip(activeTrip) else Trip(id = "", routeLabel = "", stops = emptyList()),
+                        currentStopIndex = if (activeTrip != null) {
+                            activeTrip.waypoints.indexOfFirst { it.isNext }.coerceAtLeast(0)
+                        } else 0,
+                        arrivedAtStop = false,
+                        tripCompleted = false,
+                        // Map completed trips to CompletedTrip for history display
+                        driverCompletedTrips = historyTrips.trips.map { t ->
+                            CompletedTrip(
+                                origin = t.origin ?: "Unknown",
+                                destination = t.destination ?: "Unknown",
+                                plateNumber = t.vehicleLicensePlate ?: ""
+                            )
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "loadDriverTrips failed: ${e.message}")
+                _state.update { it.copy(isLoadingDriverTrips = false) }
+            }
+        }
+    }
+
+    /**
+     * Maps a backend DriverTrip to the existing Trip model used by the UI.
+     * Waypoints are converted to TripStops; passed waypoints are already marked.
+     */
+    private fun mapBackendTripToTrip(backendTrip: BackendStorage.DriverTrip): Trip {
+        val stops = backendTrip.waypoints.mapIndexed { index, wp ->
+            TripStop(
+                id = index,
+                name = wp.locationName ?: "Stop ${index + 1}",
+                address = wp.locationName ?: "",
+                lat = wp.latitude,
+                lng = wp.longitude,
+                pickups = emptyList(),
+                dropoffs = emptyList()
+            )
+        }
+        val label = listOfNotNull(backendTrip.origin, backendTrip.destination)
+            .joinToString(" → ")
+            .ifBlank { backendTrip.routeName ?: "Trip #${backendTrip.id}" }
+        return Trip(id = backendTrip.id.toString(), routeLabel = label, stops = stops)
+    }
+
+    /**
+     * Refresh the driver's active trip and history.
+     * Call this from pull-to-refresh or after status changes.
+     */
+    fun refreshDriverTrips() {
+        loadDriverTrips()
     }
 
     fun loadDriverPackages() {
@@ -2703,6 +2821,82 @@ class TripViewModel : ViewModel() {
 
     fun updateCreatePackageFragile(fragile: Boolean) {
         _state.update { it.copy(createPackageForm = it.createPackageForm.copy(isFragile = fragile)) }
+        saveCreatePackageDraft()
+    }
+
+    // ── Location search (cavgotrips via gateway) ─────────────────────────
+    private var locationSearchJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Debounced location search from cavgotrips. Results update
+     * `createPackageForm.locationSearchResults` so the dropdown can render them.
+     */
+    fun searchLocations(query: String) {
+        locationSearchJob?.cancel()
+        if (query.isBlank()) {
+            _state.update { it.copy(
+                createPackageForm = it.createPackageForm.copy(
+                    locationSearchResults = emptyList(),
+                    isSearchingLocations = false
+                )
+            ) }
+            return
+        }
+        locationSearchJob = viewModelScope.launch {
+            _state.update { it.copy(
+                createPackageForm = it.createPackageForm.copy(isSearchingLocations = true)
+            ) }
+            val results = com.gocavgo.ikuriye.network.BackendStorage.searchLocations(query)
+            _state.update { it.copy(
+                createPackageForm = it.createPackageForm.copy(
+                    locationSearchResults = results.map { loc ->
+                        LocationSearchResult(
+                            id = loc.id,
+                            latitude = loc.latitude,
+                            longitude = loc.longitude,
+                            customName = loc.customName,
+                            googlePlaceName = loc.googlePlaceName,
+                            province = loc.province,
+                            district = loc.district,
+                            placeId = loc.placeId,
+                            code = loc.code
+                        )
+                    },
+                    isSearchingLocations = false
+                )
+            ) }
+        }
+    }
+
+    fun clearLocationSearch() {
+        locationSearchJob?.cancel()
+        _state.update { it.copy(
+            createPackageForm = it.createPackageForm.copy(
+                locationSearchResults = emptyList(),
+                isSearchingLocations = false
+            )
+        ) }
+    }
+
+    /** User selected an origin location from the search results. */
+    fun selectOriginLocation(loc: LocationSearchResult) {
+        _state.update { it.copy(
+            createPackageForm = it.createPackageForm.withOriginLocation(loc).copy(
+                locationSearchResults = emptyList(),
+                isSearchingLocations = false
+            )
+        ) }
+        saveCreatePackageDraft()
+    }
+
+    /** User selected a destination location from the search results. */
+    fun selectDestLocation(loc: LocationSearchResult) {
+        _state.update { it.copy(
+            createPackageForm = it.createPackageForm.withDestLocation(loc).copy(
+                locationSearchResults = emptyList(),
+                isSearchingLocations = false
+            )
+        ) }
         saveCreatePackageDraft()
     }
 

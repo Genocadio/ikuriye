@@ -816,59 +816,80 @@ fun RouteProgressStrip(state: TripUiState) {
     }
 }
 
-// ── Action Button ─────────────────────────────────────────────────────────────
+// ── Trip Status (read-only, driven by backend data) ────────────────────────────
 @Composable
 fun TripActionButton(state: TripUiState, viewModel: TripViewModel) {
     val colors = LocalDriversColors.current
-    val isLast = state.currentStopIndex == state.trip.stops.lastIndex
-
-    if (state.tripCompleted) {
-        Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            shape = RoundedCornerShape(12.dp),
-            color = colors.green.copy(alpha = 0.1f),
-            border = BorderStroke(1.dp, colors.green.copy(alpha = 0.3f))
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(Icons.Filled.CheckCircle, null, tint = colors.green, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Trip Completed", color = colors.green, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-        return
-    }
+    val activeTrip = state.activeDriverTrip
+    val tripStatus = activeTrip?.status
 
     Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        if (!state.arrivedAtStop) {
-            Button(
-                onClick = { viewModel.arriveAtCurrentStop() },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = colors.blue)
-            ) {
-                Icon(Icons.Filled.LocationOn, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Arrived at ${viewModel.currentStop.name}", fontWeight = FontWeight.Bold)
+        when {
+            tripStatus == "COMPLETED" -> {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.green.copy(alpha = 0.1f),
+                    border = BorderStroke(1.dp, colors.green.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(Icons.Filled.CheckCircle, null, tint = colors.green, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Trip Completed", color = colors.green, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
-        } else {
-            Button(
-                onClick = { viewModel.departCurrentStop() },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isLast) colors.green else colors.amber)
-            ) {
-                Icon(
-                    if (isLast) Icons.Filled.CheckCircle else Icons.AutoMirrored.Filled.ArrowForward,
-                    null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    if (isLast) "Complete Trip" else "Depart → ${viewModel.nextStop?.name}",
-                    fontWeight = FontWeight.Bold)
+            tripStatus == "IN_PROGRESS" -> {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.blue.copy(alpha = 0.1f),
+                    border = BorderStroke(1.dp, colors.blue.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(Icons.Filled.Navigation, null, tint = colors.blue, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("Trip In Progress", color = colors.blue, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            val nextWp = activeTrip?.waypoints?.firstOrNull { it.isNext }
+                            if (nextWp != null) {
+                                Text(
+                                    "Next: ${nextWp.locationName ?: "Stop"}",
+                                    color = colors.textSecondary, fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            tripStatus == "SCHEDULED" -> {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.amber.copy(alpha = 0.1f),
+                    border = BorderStroke(1.dp, colors.amber.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(Icons.Filled.Schedule, null, tint = colors.amber, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Trip Scheduled", color = colors.amber, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            else -> {
+                // No active trip — show nothing (the "No active trip" screen is shown by DriverHomeScreen)
             }
         }
     }

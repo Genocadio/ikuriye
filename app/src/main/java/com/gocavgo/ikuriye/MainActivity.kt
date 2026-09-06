@@ -96,13 +96,11 @@ class MainActivity : ComponentActivity() {
         if (fineGranted || coarseGranted) {
             Log.i(TAG, "Location permission granted")
             pendingLocationStart = false
-            // Only drivers use continuous background tracking; clients just get
-            // foreground location access (no service, no background permission).
-            if (tripViewModel?.state?.value?.appRole == AppRole.DRIVER) {
-                startLocationService()
-                requestBackgroundLocationIfNeeded()
-                LocationService.requestBatteryOptimisationExemption(this)
-            }
+            // All logged-in users get continuous location tracking (drivers + clients)
+            // so their position is published to the MQTT broker.
+            startLocationService()
+            requestBackgroundLocationIfNeeded()
+            LocationService.requestBatteryOptimisationExemption(this)
         } else {
             Log.w(TAG, "Location permission denied")
             pendingLocationStart = false
@@ -189,30 +187,23 @@ class MainActivity : ComponentActivity() {
                 updatePipParams()
             }
 
-            // Request location access on launch for both roles.
-            // Only drivers use continuous background tracking (LocationService);
-            // clients get foreground location access but never background
-            // location, the tracking service, or battery-optimisation exemptions.
+            // Request location access on launch for ALL logged-in users.
+            // Both drivers and clients publish their GPS to the MQTT broker.
             LaunchedEffect(state.appRole) {
                 if (state.appRole == AppRole.NONE) return@LaunchedEffect
-                val driver = state.appRole == AppRole.DRIVER
                 if (hasLocationPermissions()) {
-                    if (driver) {
-                        startLocationService()
-                        requestBackgroundLocationIfNeeded()
-                        LocationService.requestBatteryOptimisationExemption(this@MainActivity)
-                    }
+                    startLocationService()
+                    requestBackgroundLocationIfNeeded()
+                    LocationService.requestBatteryOptimisationExemption(this@MainActivity)
                 } else {
-                    pendingLocationStart = driver
+                    pendingLocationStart = true
                     requestPermissionsIfNeeded()
                 }
             }
 
-            // Stop the location service whenever we leave driver mode
-            // (logout, role switch, or client session) — guarantees clients
-            // are never background-tracked even after a driver session.
-            LaunchedEffect(state.appRole, state.isLoggedIn) {
-                if (state.appRole != AppRole.DRIVER || !state.isLoggedIn) {
+            // Stop the location service on logout
+            LaunchedEffect(state.isLoggedIn) {
+                if (!state.isLoggedIn) {
                     stopLocationService()
                 }
             }
@@ -630,6 +621,9 @@ class MainActivity : ComponentActivity() {
                                 formState = state.createPackageForm,
                                 onFormFieldChange = vm::updateCreatePackageFormField,
                                 onFragileChange = vm::updateCreatePackageFragile,
+                                onOriginLocationSelect = vm::selectOriginLocation,
+                                onDestLocationSelect = vm::selectDestLocation,
+                                onSearchLocations = vm::searchLocations,
                                 isSubmitting = state.isSubmittingPackage,
                                 userSearchResults = state.userSearchResults,
                                 onUserSearch = vm::searchUsers,
@@ -673,6 +667,9 @@ class MainActivity : ComponentActivity() {
                         formState = state.createPackageForm,
                         onFormFieldChange = vm::updateCreatePackageFormField,
                         onFragileChange = vm::updateCreatePackageFragile,
+                        onOriginLocationSelect = vm::selectOriginLocation,
+                        onDestLocationSelect = vm::selectDestLocation,
+                        onSearchLocations = vm::searchLocations,
                         showSenderFields = true,
                         isSubmitting = state.isSubmittingPackage,
                         userSearchResults = state.userSearchResults,
