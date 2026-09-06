@@ -232,7 +232,20 @@ class TripViewModel : ViewModel() {
                 val syncResult = AuthRepository.restoreSession()
                 when (syncResult) {
                     is AuthResult.Success -> {
-                        applyUser(syncResult.user)
+                        // Never downgrade role during restore — if the backend says
+                        // CUSTOMER but we cached DRIVER, keep the cached role. This
+                        // prevents a stale/failed profile fetch from flipping a driver
+                        // to the client screen on app open.
+                        val backendRole = syncResult.user.role.name
+                        val cachedRole = cached.role.name
+                        if (cachedRole == "DRIVER" && backendRole != "DRIVER") {
+                            Log.w(TAG, "restoreSession: backend role $backendRole < cached DRIVER — keeping DRIVER")
+                            applyUser(syncResult.user.copy(
+                                role = com.gocavgo.ikuriye.data.dto.RoleDto.DRIVER
+                            ))
+                        } else {
+                            applyUser(syncResult.user)
+                        }
                     }
                     is AuthResult.VerificationRequired -> {
                         // Session restored but user not fully confirmed

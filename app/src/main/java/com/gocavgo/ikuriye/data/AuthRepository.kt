@@ -295,10 +295,16 @@ object AuthRepository {
             "admin" to 4,
             "super_admin" to 5
         )
-        return roles.mapNotNull { role ->
+        val mapped = roles.mapNotNull { role ->
             val name = role.uppercase().replace("-", "_")
             try { RoleDto.valueOf(name) to (precedence[role.lowercase()] ?: 0) } catch (_: Exception) { null }
-        }.maxByOrNull { it.second }?.first ?: RoleDto.CUSTOMER
+        }.maxByOrNull { it.second }?.first
+        if (mapped == null && roles.isNotEmpty()) {
+            Log.w(TAG, "mapNexxauthRole: could not map roles $roles — falling back to CUSTOMER")
+        } else if (roles.isEmpty()) {
+            Log.w(TAG, "mapNexxauthRole: Nexxauth returned empty roles array — defaulting to CUSTOMER")
+        }
+        return mapped ?: RoleDto.CUSTOMER
     }
 
     /**

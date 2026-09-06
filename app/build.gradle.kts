@@ -68,18 +68,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Backend endpoints & storage buckets — overridable via secrets.properties
-        // Supabase is used for FILE UPLOADS ONLY — auth is handled by Nexxauth.
-        buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL", "")}\"")
-        buildConfigField("String", "SUPABASE_KEY", "\"${secret("SUPABASE_KEY", "")}\"")
-        buildConfigField("String", "GRAPHQL_URL", "\"${secret("GRAPHQL_URL", "https://api.med.rw/gocavgo/ikuriye/graphql")}\"")
-        // Base URL for REST endpoints (location search, file upload) served by the gateway.
-        // Derived by stripping the /ikuriye/graphql suffix from GRAPHQL_URL.
-        val restBaseUrl = secret("GRAPHQL_URL", "https://api.med.rw/gocavgo/ikuriye/graphql")
-            .removeSuffix("/ikuriye/graphql")
-        buildConfigField("String", "REST_BASE_URL", "\"${restBaseUrl}\"")
-        buildConfigField("String", "MEDIA_BUCKET", "\"${secret("MEDIA_BUCKET", "package-media")}\"")
-        buildConfigField("String", "PROFILE_BUCKET", "\"${secret("PROFILE_BUCKET", "profiles")}\"")
+        // CavGo Gateway — single base URL for all backend services.
+        // GraphQL and REST endpoints are derived from this at build time.
+        val cavgoBaseUrl = secret("CAVGO_BASE_URL", "https://api.med.rw/gocavgo")
+        buildConfigField("String", "CAVGO_BASE_URL", "\"${cavgoBaseUrl}\"")
+        buildConfigField("String", "GRAPHQL_URL", "\"${cavgoBaseUrl}/ikuriye/graphql\"")
+        buildConfigField("String", "REST_BASE_URL", "\"${cavgoBaseUrl}\"")
         // Nexxauth — identity provider. Base URL includes the platform slug:
         // https://auth.med.rw/master. Client key from the ANDROID client in the
         // Nexxauth console; org slug matches the organisation registered there.
@@ -143,12 +137,7 @@ android {
 
 dependencies {
 
-    // supabase — STORAGE ONLY (file uploads). Auth/Postgrest/Realtime are gone;
-    // authentication is handled by Nexxauth.
-    implementation(platform(libs.supabase.bom))
     implementation(libs.androidx.compose.foundation)
-    implementation(libs.supabase.storage.kt)
-    implementation("io.ktor:ktor-client-okhttp:3.5.2")
     implementation("androidx.camera:camera-camera2:1.6.1")
     implementation("androidx.camera:camera-lifecycle:1.6.1")
     implementation("androidx.camera:camera-view:1.6.1")
@@ -211,7 +200,7 @@ apollo {
         packageName.set("com.gocavgo.ikuriye")
         introspection {
             // Same source of truth as BuildConfig.GRAPHQL_URL
-            endpointUrl.set(secret("GRAPHQL_URL", "https://api.med.rw/deliveries/graphql"))
+            endpointUrl.set(secret("CAVGO_BASE_URL", "https://api.med.rw/gocavgo") + "/ikuriye/graphql")
             schemaFile.set(file("src/main/graphql/schema.graphqls"))
         }
     }

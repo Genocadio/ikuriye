@@ -35,8 +35,7 @@ object BackendStorage {
 
     /**
      * Base URL for REST endpoints served through the gateway.
-     * Derived at build time from GRAPHQL_URL — strips /ikuriye/graphql to get
-     * the gateway root, e.g. https://api.med.rw/gocavgo.
+     * Set via CAVGO_BASE_URL in secrets.properties, e.g. https://api.med.rw/gocavgo.
      */
     private val restBaseUrl: String = BuildConfig.REST_BASE_URL
 
@@ -337,7 +336,7 @@ object BackendStorage {
                     .build()
 
                 val request = Request.Builder()
-                    .url("${BuildConfig.GRAPHQL_URL.replace("/graphql", "")}/api/files/upload")
+                    .url("${BuildConfig.REST_BASE_URL}/ikuriye/api/files/upload")
                     .addHeader("Authorization", "Bearer $currentToken")
                     .post(body)
                     .build()
