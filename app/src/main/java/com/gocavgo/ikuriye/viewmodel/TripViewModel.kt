@@ -1852,6 +1852,7 @@ class TripViewModel : ViewModel() {
                 val activeTrip = activeTrips.trips.firstOrNull()
                 // Fetch completed trips for history
                 val historyTrips = BackendStorage.fetchDriverTrips(userId, "COMPLETED", limit = 20)
+                Log.d(TAG, "loadDriverTrips OK: active=${activeTrip?.id ?: "none"} (status=${activeTrip?.status}), history=${historyTrips.trips.size}, metrics=${activeTrips.metrics != null || historyTrips.metrics != null}")
                 _state.update {
                     it.copy(
                         activeDriverTrip = activeTrip,

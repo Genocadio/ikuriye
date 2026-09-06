@@ -166,7 +166,9 @@ object BackendStorage {
                 return@withContext DriverTripsResponse(emptyList(), 0, null)
             }
             val json = JSONObject(body)
-            val tripsArray = json.optJSONArray("trips") ?: return@withContext DriverTripsResponse(emptyList(), 0, null)
+            val tripsArray = json.optJSONArray("trips")
+            Log.d(TAG, "fetchDriverTrips OK: driver=$driverId status=$status → ${tripsArray?.length() ?: 0} trips (total=${json.optLong("total", 0)})")
+            if (tripsArray == null) return@withContext DriverTripsResponse(emptyList(), 0, null)
             val trips = mutableListOf<DriverTrip>()
             for (i in 0 until tripsArray.length()) {
                 val t = tripsArray.getJSONObject(i)

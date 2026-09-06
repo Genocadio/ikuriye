@@ -107,6 +107,13 @@ fun DriverHomeScreen(
     val maxW   = contentMaxWidth()
     var hasAppeared by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
+    var isRefreshingTrips by remember { mutableStateOf(false) }
+    // Reset pull-to-refresh indicator when trip loading completes
+    LaunchedEffect(state.isLoadingDriverTrips) {
+        if (!state.isLoadingDriverTrips && isRefreshingTrips) {
+            isRefreshingTrips = false
+        }
+    }
     val pagerState = rememberPagerState(pageCount = { 2 })
     // Sync pager → driverHomeTab (for bottom bar)
     LaunchedEffect(pagerState.currentPage) {
@@ -131,6 +138,13 @@ fun DriverHomeScreen(
         ) { tab ->
             when (tab) {
                 0 -> {
+                    androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+                        isRefreshing = isRefreshingTrips,
+                        onRefresh = {
+                            isRefreshingTrips = true
+                            viewModel.refreshDriverTrips()
+                        }
+                    ) {
                     if (state.hasActiveTrip) {
                         TripContent(
                             viewModel       = viewModel,
@@ -162,6 +176,7 @@ fun DriverHomeScreen(
                             }
                         }
                     }
+                    } // PullToRefreshBox
                 }
                 else -> DriverPackagesTab(viewModel = viewModel)
             }
