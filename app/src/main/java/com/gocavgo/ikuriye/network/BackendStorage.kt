@@ -5,6 +5,7 @@ import com.gocavgo.ikuriye.BuildConfig
 import com.gocavgo.ikuriye.nexx.NexxAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -13,6 +14,27 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+
+/**
+ * Reads a route endpoint ("origin"/"destination") which may be a plain string
+ * or a nested location object. Returns (displayName, (latitude?, longitude?)).
+ */
+private fun routeLocation(route: JSONObject?, key: String): Pair<String?, Pair<Double?, Double?>>? {
+    if (route == null || !route.has(key)) return null
+    val value = route.opt(key)
+    if (value is JSONObject) {
+        val name = value.optString("custom_name", null)
+            ?: value.optString("google_place_name", null)
+            ?: value.optString("code", null)
+        val lat = if (value.has("latitude")) value.optDouble("latitude") else null
+        val lng = if (value.has("longitude")) value.optDouble("longitude") else null
+        return Pair(name, Pair(lat, lng))
+    }
+    if (value is String) {
+        return Pair(if (value.isNotBlank()) value else null, Pair(null, null))
+    }
+    return null
+}
 
 /**
  * Uploads files through the CavGo backend. Returns only what clients need:
@@ -123,6 +145,10 @@ object BackendStorage {
         val status: String?,
         val origin: String?,
         val destination: String?,
+        val originLatitude: Double? = null,
+        val originLongitude: Double? = null,
+        val destinationLatitude: Double? = null,
+        val destinationLongitude: Double? = null,
         val routeName: String?,
         val departureTime: Long?,
         val currentLatitude: Double?,
@@ -179,11 +205,24 @@ object BackendStorage {
                 if (wpsArray != null) {
                     for (j in 0 until wpsArray.length()) {
                         val wp = wpsArray.getJSONObject(j)
+                        // Waypoints may be flattened (location_name/latitude/...) or
+                        // nested under a "location" object — tolerate both shapes.
+                        val wpLocation = wp.optJSONObject("location")
+                        val locationName = when {
+                            wp.has("location_name") -> wp.optString("location_name", null)
+                            wpLocation != null -> wpLocation.optString("custom_name", null)
+                                ?: wpLocation.optString("google_place_name", null)
+                            else -> null
+                        }
+                        val lat = if (wp.has("latitude")) wp.optDouble("latitude", 0.0)
+                            else wpLocation?.optDouble("latitude", 0.0) ?: 0.0
+                        val lng = if (wp.has("longitude")) wp.optDouble("longitude", 0.0)
+                            else wpLocation?.optDouble("longitude", 0.0) ?: 0.0
                         waypoints.add(
                             DriverTripWaypoint(
-                                locationName = wp.optString("location_name", null),
-                                latitude = wp.optDouble("latitude", 0.0),
-                                longitude = wp.optDouble("longitude", 0.0),
+                                locationName = locationName,
+                                latitude = lat,
+                                longitude = lng,
                                 isPassed = wp.optBoolean("is_passed", false),
                                 isNext = wp.optBoolean("is_next", false),
                                 remainingDistance = if (wp.has("remaining_distance")) wp.optDouble("remaining_distance") else null,
@@ -192,12 +231,19 @@ object BackendStorage {
                         )
                     }
                 }
+                // Route endpoints may be strings or nested location objects.
+                val routeOrigin = routeLocation(route, "origin")
+                val routeDestination = routeLocation(route, "destination")
                 trips.add(
                     DriverTrip(
                         id = t.optLong("id", 0),
                         status = t.optString("status", null),
-                        origin = route?.optString("origin", null),
-                        destination = route?.optString("destination", null),
+                        origin = routeOrigin?.first,
+                        destination = routeDestination?.first,
+                        originLatitude = routeOrigin?.second?.first,
+                        originLongitude = routeOrigin?.second?.second,
+                        destinationLatitude = routeDestination?.second?.first,
+                        destinationLongitude = routeDestination?.second?.second,
                         routeName = route?.optString("name", null),
                         departureTime = if (t.has("departure_time")) t.optLong("departure_time") else null,
                         currentLatitude = if (t.has("current_latitude")) t.optDouble("current_latitude") else null,
@@ -224,6 +270,117 @@ object BackendStorage {
         } catch (e: Exception) {
             Log.w(TAG, "fetchDriverTrips failed: ${e.message}")
             DriverTripsResponse(emptyList(), 0, null)
+        }
+    }
+
+    // ── Route search + trip creation (cavgotrips via gateway /navig) ─────
+
+    data class DriverRoute(
+        val id: Long,
+        val name: String?,
+        val distanceMeters: Long?,
+        val estimatedDurationSeconds: Long?,
+        val routePrice: Double?,
+        val cityRoute: Boolean,
+        val originName: String?,
+        val destinationName: String?
+    ) {
+        /** Display label like "Kigali → Musanze". */
+        fun displayLabel(): String = listOfNotNull(originName, destinationName)
+            .joinToString(" → ")
+            .ifBlank { name ?: "Route #$id" }
+    }
+
+    /**
+     * Search routes from cavgotrips through the gateway. Filters are fuzzy
+     * name matches on the route origin/destination locations.
+     * Returns an empty list on failure so the UI degrades gracefully.
+     */
+    suspend fun searchRoutes(origin: String? = null, destination: String? = null, limit: Int = 50): List<DriverRoute> = withContext(Dispatchers.IO) {
+        try {
+            val urlBuilder = "$restBaseUrl/navig/routes".toHttpUrl().newBuilder()
+            origin?.takeIf { it.isNotBlank() }?.let { urlBuilder.addQueryParameter("origin", it) }
+            destination?.takeIf { it.isNotBlank() }?.let { urlBuilder.addQueryParameter("destination", it) }
+            urlBuilder.addQueryParameter("page", "1")
+            urlBuilder.addQueryParameter("limit", limit.toString())
+            val request = Request.Builder().url(urlBuilder.build()).get().addHeader("Accept", "application/json").build()
+            val response = httpClient.newCall(request).execute()
+            val body = response.body?.string() ?: return@withContext emptyList()
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Route search failed: HTTP ${response.code}")
+                return@withContext emptyList()
+            }
+            val json = JSONObject(body)
+            val dataArray = json.optJSONArray("data") ?: return@withContext emptyList()
+            val results = mutableListOf<DriverRoute>()
+            for (i in 0 until dataArray.length()) {
+                val obj = dataArray.getJSONObject(i)
+                results.add(
+                    DriverRoute(
+                        id = obj.optLong("id", 0),
+                        name = obj.optString("name", null),
+                        distanceMeters = if (obj.has("distance_meters")) obj.optLong("distance_meters") else null,
+                        estimatedDurationSeconds = if (obj.has("estimated_duration_seconds")) obj.optLong("estimated_duration_seconds") else null,
+                        routePrice = if (obj.has("route_price") && !obj.isNull("route_price")) obj.optDouble("route_price") else null,
+                        cityRoute = obj.optBoolean("city_route", false),
+                        originName = obj.optJSONObject("origin")?.let { loc ->
+                            loc.optString("custom_name", null) ?: loc.optString("google_place_name", null)
+                        },
+                        destinationName = obj.optJSONObject("destination")?.let { loc ->
+                            loc.optString("custom_name", null) ?: loc.optString("google_place_name", null)
+                        }
+                    )
+                )
+            }
+            results
+        } catch (e: Exception) {
+            Log.w(TAG, "Route search failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Create a trip on cavgotrips via the gateway.
+     * Minimal flow mirrors fleetman: route + vehicle + departure time + reverse flag.
+     * Returns null on success, or an error message on failure.
+     */
+    suspend fun createTrip(
+        routeId: Long,
+        vehicleId: Long,
+        departureTimeSeconds: Long,
+        isReversed: Boolean = false
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val jsonBody = JSONObject().apply {
+                put("route_id", routeId)
+                put("vehicle_id", vehicleId)
+                put("departure_time", departureTimeSeconds)
+                put("connection_mode", "ONLINE")
+                put("is_reversed", isReversed)
+            }.toString()
+            val request = Request.Builder()
+                .url("$restBaseUrl/navig/trips")
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "application/json")
+                .build()
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string()
+            if (response.isSuccessful) {
+                Log.d(TAG, "createTrip OK: route=$routeId vehicle=$vehicleId reversed=$isReversed")
+                null
+            } else {
+                Log.w(TAG, "createTrip failed: HTTP ${response.code}: $responseBody")
+                val message = try {
+                    JSONObject(responseBody ?: "").optString("error")
+                } catch (e: Exception) {
+                    ""
+                }
+                message.ifBlank { "Failed to create trip (HTTP ${response.code})" }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "createTrip failed: ${e.message}")
+            "Failed to create trip: ${e.message}"
         }
     }
 

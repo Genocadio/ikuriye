@@ -92,9 +92,24 @@ data class DriverProfile(
 )
 
 data class DriverVehicle(
+    val id: Long? = null,
     val plateNumber: String = "RAC 482K",
     val model: String = "Toyota Hiace",
     val seats: Int = 14
+)
+
+/**
+ * A stop on the driver's active trip that a new package may be picked up from
+ * or dropped off at. The list is derived from the trip's stops, restricted to
+ * stops the driver can still reach (unpassed stops, plus the stop he just left
+ * when it can still act as a pickup point).
+ */
+data class TripPackageLocation(
+    val index: Int,
+    val name: String,
+    val subtitle: String,
+    val lat: Double,
+    val lng: Double
 )
 
 data class CompletedTrip(
@@ -156,6 +171,24 @@ data class TripUiState(
     val defaultPage: String = "trips",
     val keepScreenAwake: Boolean = false,
     val isDriverCreatingPackage: Boolean = false,
+    val isDriverCreatingTrip: Boolean = false,
+    val driverHasVehicle: Boolean = false,
+    val driverTripOriginSearch: String = "",
+    val driverTripDestinationSearch: String = "",
+    val driverTripOriginResults: List<LocationSearchResult> = emptyList(),
+    val driverTripDestinationResults: List<LocationSearchResult> = emptyList(),
+    val isSearchingDriverTripLocations: Boolean = false,
+    val driverRouteSearchResults: List<BackendStorage.DriverRoute> = emptyList(),
+    val isSearchingDriverRoutes: Boolean = false,
+    val driverSelectedRoute: BackendStorage.DriverRoute? = null,
+    val driverTripIsReversed: Boolean = false,
+    val driverTripDepartureTime: Long? = null, // Unix seconds
+    val isCreatingDriverTrip: Boolean = false,
+    val driverTripError: String? = null,
+    // Package creation while on an active trip — pickup/delivery is constrained
+    // to the trip's eligible stops (see TripPackageLocation).
+    val driverPackageOriginOptions: List<TripPackageLocation> = emptyList(),
+    val driverPackageDestinationOptions: List<TripPackageLocation> = emptyList(),
     val isDriverProfileMenuOpen: Boolean = false,
     val isDriverSettingsOpen: Boolean = false,
     // Trip state (real backend data)

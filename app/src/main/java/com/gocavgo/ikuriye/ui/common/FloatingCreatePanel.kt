@@ -69,6 +69,11 @@ fun FloatingCreatePanel(
     onOriginLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
     onDestLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
     onSearchLocations: (String) -> Unit = {},
+    // When set, pickup/delivery must be chosen from these active-trip stops.
+    tripOriginOptions: List<com.gocavgo.ikuriye.viewmodel.TripPackageLocation> = emptyList(),
+    tripDestinationOptions: List<com.gocavgo.ikuriye.viewmodel.TripPackageLocation> = emptyList(),
+    onTripOriginSelect: (com.gocavgo.ikuriye.viewmodel.TripPackageLocation) -> Unit = {},
+    onTripDestinationSelect: (com.gocavgo.ikuriye.viewmodel.TripPackageLocation) -> Unit = {},
     showSenderFields: Boolean = false,
     isSubmitting: Boolean = false,
     userSearchResults: List<SearchUsersQuery.SearchUser> = emptyList(),
@@ -361,6 +366,10 @@ fun FloatingCreatePanel(
                                 onOriginLocationSelect = onOriginLocationSelect,
                                 onDestLocationSelect = onDestLocationSelect,
                                 onSearchLocations = onSearchLocations,
+                                tripOriginOptions = tripOriginOptions,
+                                tripDestinationOptions = tripDestinationOptions,
+                                onTripOriginSelect = onTripOriginSelect,
+                                onTripDestinationSelect = onTripDestinationSelect,
                                 currentStep = currentStep,
                                 onStepChange = { step ->
                                     currentStep = step

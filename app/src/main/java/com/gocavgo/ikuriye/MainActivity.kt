@@ -64,6 +64,7 @@ import com.gocavgo.ikuriye.ui.RoleSelectionScreen
 import com.gocavgo.ikuriye.ui.TrackPackageScreen
 import com.gocavgo.ikuriye.ui.driver.AcceptTransferCodeDialog
 import com.gocavgo.ikuriye.ui.driver.ConfirmTransferDialog
+import com.gocavgo.ikuriye.ui.driver.CreateTripPanel
 import com.gocavgo.ikuriye.ui.driver.RejectTransferDialog
 import com.gocavgo.ikuriye.ui.driver.RequestTransferDialog
 import com.gocavgo.ikuriye.ui.driver.SecureTransferCodeRevealDialog
@@ -647,28 +648,15 @@ class MainActivity : ComponentActivity() {
                     onNoticeClick = vm::openNoticeFromNotification
                 )
 
-                // ── FloatingCreatePanel overlay (driver side) ────────────────
+                // ── FloatingCreatePanel overlay (driver side — active trip only;
+                // pickup/delivery are constrained to the active trip's stops) ──
                 if (state.appRole == AppRole.DRIVER && state.isDriverCreatingPackage) {
-                    val hasUnsavedPackageData = state.createPackageForm.fromAddress.isNotBlank() ||
-                        state.createPackageForm.description.isNotBlank() ||
-                        state.createPackageForm.category.isNotBlank() ||
-                        state.createPackageForm.weight.isNotBlank() ||
-                        state.createPackageForm.recipientName.isNotBlank() ||
-                        state.createPackageForm.toAddress.isNotBlank() ||
-                        state.createPackageForm.recipientPhone.isNotBlank() ||
-                        state.createPackageForm.senderName.isNotBlank() ||
-                        state.createPackageForm.senderPhone.isNotBlank() ||
-                        state.mediaUploads.isNotEmpty()
                     FloatingCreatePanel(
                         visible = true,
-                        onDiscardDraft = vm::resetCreatePackageForm,
-                        hasUnsavedData = hasUnsavedPackageData,
                         onDismiss = vm::closeDriverCreatePackage,
                         formState = state.createPackageForm,
                         onFormFieldChange = vm::updateCreatePackageFormField,
                         onFragileChange = vm::updateCreatePackageFragile,
-                        onOriginLocationSelect = vm::selectOriginLocation,
-                        onDestLocationSelect = vm::selectDestLocation,
                         onSearchLocations = vm::searchLocations,
                         showSenderFields = true,
                         isSubmitting = state.isSubmittingPackage,
@@ -679,7 +667,41 @@ class MainActivity : ComponentActivity() {
                         onAddMedia = vm::addMediaForUpload,
                         onCancelUpload = vm::cancelMediaUpload,
                         onRemoveMedia = vm::removeMedia,
+                        tripOriginOptions = state.driverPackageOriginOptions,
+                        tripDestinationOptions = state.driverPackageDestinationOptions,
+                        onTripOriginSelect = vm::selectDriverPackageOrigin,
+                        onTripDestinationSelect = vm::selectDriverPackageDestination,
                         onSubmit = { pkg -> vm.createPackage(pkg) }
+                    )
+                }
+
+                // ── Create Trip overlay (driver side, no active trip) ────────
+                if (state.appRole == AppRole.DRIVER && state.isDriverCreatingTrip) {
+                    CreateTripPanel(
+                        onDismiss = vm::closeDriverCreateTrip,
+                        originSearch = state.driverTripOriginSearch,
+                        destinationSearch = state.driverTripDestinationSearch,
+                        originResults = state.driverTripOriginResults,
+                        destinationResults = state.driverTripDestinationResults,
+                        isSearchingLocations = state.isSearchingDriverTripLocations,
+                        routeResults = state.driverRouteSearchResults,
+                        isSearchingRoutes = state.isSearchingDriverRoutes,
+                        selectedRoute = state.driverSelectedRoute,
+                        isReversed = state.driverTripIsReversed,
+                        departureTimeSeconds = state.driverTripDepartureTime,
+                        isCreating = state.isCreatingDriverTrip,
+                        error = state.driverTripError,
+                        onOriginSearch = vm::searchDriverTripOrigin,
+                        onDestinationSearch = vm::searchDriverTripDestination,
+                        onOriginSelect = vm::selectDriverTripOrigin,
+                        onDestinationSelect = vm::selectDriverTripDestination,
+                        onOriginClear = vm::clearDriverTripOrigin,
+                        onDestinationClear = vm::clearDriverTripDestination,
+                        onSearchRoutes = vm::searchDriverRoutes,
+                        onRouteSelect = vm::selectDriverRoute,
+                        onReversedChange = vm::setDriverTripReversed,
+                        onDepartureTimeChange = vm::setDriverTripDepartureTime,
+                        onCreateTrip = vm::createDriverTrip
                     )
                 }
             }

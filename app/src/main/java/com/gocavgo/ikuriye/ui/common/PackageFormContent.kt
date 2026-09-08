@@ -80,6 +80,12 @@ fun PackageFormContent(
     onOriginLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
     onDestLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit = {},
     onSearchLocations: (String) -> Unit = {},
+    // When set, pickup/delivery must be chosen from these trip stops instead of
+    // a free-text location search (driver creating a package on an active trip).
+    tripOriginOptions: List<com.gocavgo.ikuriye.viewmodel.TripPackageLocation> = emptyList(),
+    tripDestinationOptions: List<com.gocavgo.ikuriye.viewmodel.TripPackageLocation> = emptyList(),
+    onTripOriginSelect: (com.gocavgo.ikuriye.viewmodel.TripPackageLocation) -> Unit = {},
+    onTripDestinationSelect: (com.gocavgo.ikuriye.viewmodel.TripPackageLocation) -> Unit = {},
     currentStep: Int,
     onStepChange: (Int) -> Unit,
     stepIsValid: Boolean,
@@ -297,6 +303,10 @@ fun PackageFormContent(
                             onOriginLocationSelect = onOriginLocationSelect,
                             onDestLocationSelect = onDestLocationSelect,
                             onSearchLocations = onSearchLocations,
+                            tripOriginOptions = tripOriginOptions,
+                            tripDestinationOptions = tripDestinationOptions,
+                            onTripOriginSelect = onTripOriginSelect,
+                            onTripDestinationSelect = onTripDestinationSelect,
                             showSenderFields = showSenderFields,
                             userSearchResults = userSearchResults,
                             onUserSearch = onUserSearch,
@@ -476,6 +486,10 @@ private fun LocationStep(
     onOriginLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit,
     onDestLocationSelect: (com.gocavgo.ikuriye.viewmodel.LocationSearchResult) -> Unit,
     onSearchLocations: (String) -> Unit,
+    tripOriginOptions: List<com.gocavgo.ikuriye.viewmodel.TripPackageLocation>,
+    tripDestinationOptions: List<com.gocavgo.ikuriye.viewmodel.TripPackageLocation>,
+    onTripOriginSelect: (com.gocavgo.ikuriye.viewmodel.TripPackageLocation) -> Unit,
+    onTripDestinationSelect: (com.gocavgo.ikuriye.viewmodel.TripPackageLocation) -> Unit,
     showSenderFields: Boolean,
     userSearchResults: List<SearchUsersQuery.SearchUser>,
     onUserSearch: (String) -> Unit,
@@ -588,35 +602,62 @@ private fun LocationStep(
 
     // ── Stage 1: Pickup location ──
     FormLabel("Pickup location")
-    LocationSearchField(
-        value = formState.fromAddress,
-        isEditing = editingFrom,
-        icon = { Icon(Icons.Filled.MyLocation, null, tint = colors.green) },
-        placeholder = if (hasSender) "From where?" else "Pickup location *",
-        showDropdown = showFromDropdown,
-        searchResults = locationResults,
-        isSearching = isSearchingLocations,
-        onValueChange = { v ->
-            onFormFieldChange("fromAddress", v)
-            onSearchLocations(v)
-            if (v.isNotBlank()) onShowFromDropdown(true)
-        },
-        onFocusChange = { if (it) { onShowFromDropdown(true); onShowToDropdown(false); onSearchLocations(formState.fromAddress) } },
-        onSelectResult = { loc ->
-            onOriginLocationSelect(loc)
-            onShowFromDropdown(false)
-            editingFrom = false
-        },
-        onSelectManual = { name ->
-            onFormFieldChange("fromAddress", name)
-            onShowFromDropdown(false)
-            editingFrom = false
-        },
-        onExpand = { editingFrom = true },
-        isError = showErrors && formState.fromAddress.isBlank(),
-        errorText = if (showErrors && formState.fromAddress.isBlank()) "Pickup location is required" else null,
-        colors = colors
-    )
+    if (tripOriginOptions.isNotEmpty()) {
+        // Driver on an active trip: pickup must be a stop he has not passed yet
+        // (or the stop he just left). No free-text locations allowed.
+        TripStopPickerField(
+            value = formState.fromAddress,
+            label = "Pickup location",
+            hint = "Choose a stop on your trip…",
+            icon = { Icon(Icons.Filled.MyLocation, null, tint = colors.green) },
+            options = tripOriginOptions,
+            onSelect = onTripOriginSelect,
+            isError = showErrors && formState.fromAddress.isBlank(),
+            errorText = if (showErrors && formState.fromAddress.isBlank()) "Choose a pickup stop on your trip" else null,
+            colors = colors
+        )
+        Text(
+            "Pickup must be a stop on your active trip.",
+            color = colors.textSecondary, fontSize = 11.sp,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+    } else if (showSenderFields) {
+        Text(
+            "No eligible pickup stops remain on your active trip.",
+            color = colors.textSecondary, fontSize = 12.sp,
+            modifier = Modifier.padding(vertical = 4.dp)
+        )
+    } else {
+        LocationSearchField(
+            value = formState.fromAddress,
+            isEditing = editingFrom,
+            icon = { Icon(Icons.Filled.MyLocation, null, tint = colors.green) },
+            placeholder = if (hasSender) "From where?" else "Pickup location *",
+            showDropdown = showFromDropdown,
+            searchResults = locationResults,
+            isSearching = isSearchingLocations,
+            onValueChange = { v ->
+                onFormFieldChange("fromAddress", v)
+                onSearchLocations(v)
+                if (v.isNotBlank()) onShowFromDropdown(true)
+            },
+            onFocusChange = { if (it) { onShowFromDropdown(true); onShowToDropdown(false); onSearchLocations(formState.fromAddress) } },
+            onSelectResult = { loc ->
+                onOriginLocationSelect(loc)
+                onShowFromDropdown(false)
+                editingFrom = false
+            },
+            onSelectManual = { name ->
+                onFormFieldChange("fromAddress", name)
+                onShowFromDropdown(false)
+                editingFrom = false
+            },
+            onExpand = { editingFrom = true },
+            isError = showErrors && formState.fromAddress.isBlank(),
+            errorText = if (showErrors && formState.fromAddress.isBlank()) "Pickup location is required" else null,
+            colors = colors
+        )
+    }
 
     // ── Stage 2: Recipient (appears after pickup is selected) ──
     AnimatedVisibility(visible = locationRevealStage >= 1, enter = fadeIn() + expandVertically()) {
@@ -705,35 +746,61 @@ private fun LocationStep(
         Column {
             Spacer(Modifier.height(8.dp))
             FormLabel("Delivery location")
-            LocationSearchField(
-                value = formState.toAddress,
-                isEditing = editingTo,
-                icon = { Icon(Icons.Filled.LocationOn, null, tint = colors.red) },
-                placeholder = "Deliver to *",
-                showDropdown = showToDropdown,
-                searchResults = locationResults,
-                isSearching = isSearchingLocations,
-                onValueChange = { v ->
-                    onFormFieldChange("toAddress", v)
-                    onSearchLocations(v)
-                    if (v.isNotBlank()) onShowToDropdown(true)
-                },
-                onFocusChange = { if (it) { onShowToDropdown(true); onShowFromDropdown(false); onSearchLocations(formState.toAddress) } },
-                onSelectResult = { loc ->
-                    onDestLocationSelect(loc)
-                    onShowToDropdown(false)
-                    editingTo = false
-                },
-                onSelectManual = { name ->
-                    onFormFieldChange("toAddress", name)
-                    onShowToDropdown(false)
-                    editingTo = false
-                },
-                onExpand = { editingTo = true },
-                isError = showErrors && formState.toAddress.isBlank(),
-                errorText = if (showErrors && formState.toAddress.isBlank()) "Delivery location is required" else null,
-                colors = colors
-            )
+            if (tripDestinationOptions.isNotEmpty()) {
+                // Driver on an active trip: delivery must be an upcoming stop.
+                TripStopPickerField(
+                    value = formState.toAddress,
+                    label = "Delivery location",
+                    hint = "Choose an upcoming stop…",
+                    icon = { Icon(Icons.Filled.LocationOn, null, tint = colors.red) },
+                    options = tripDestinationOptions,
+                    onSelect = onTripDestinationSelect,
+                    isError = showErrors && formState.toAddress.isBlank(),
+                    errorText = if (showErrors && formState.toAddress.isBlank()) "Choose a delivery stop on your trip" else null,
+                    colors = colors
+                )
+                Text(
+                    "Delivery must be an upcoming stop on your trip.",
+                    color = colors.textSecondary, fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            } else if (showSenderFields) {
+                Text(
+                    "No eligible delivery stops remain on your active trip.",
+                    color = colors.textSecondary, fontSize = 12.sp,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            } else {
+                LocationSearchField(
+                    value = formState.toAddress,
+                    isEditing = editingTo,
+                    icon = { Icon(Icons.Filled.LocationOn, null, tint = colors.red) },
+                    placeholder = "Deliver to *",
+                    showDropdown = showToDropdown,
+                    searchResults = locationResults,
+                    isSearching = isSearchingLocations,
+                    onValueChange = { v ->
+                        onFormFieldChange("toAddress", v)
+                        onSearchLocations(v)
+                        if (v.isNotBlank()) onShowToDropdown(true)
+                    },
+                    onFocusChange = { if (it) { onShowToDropdown(true); onShowFromDropdown(false); onSearchLocations(formState.toAddress) } },
+                    onSelectResult = { loc ->
+                        onDestLocationSelect(loc)
+                        onShowToDropdown(false)
+                        editingTo = false
+                    },
+                    onSelectManual = { name ->
+                        onFormFieldChange("toAddress", name)
+                        onShowToDropdown(false)
+                        editingTo = false
+                    },
+                    onExpand = { editingTo = true },
+                    isError = showErrors && formState.toAddress.isBlank(),
+                    errorText = if (showErrors && formState.toAddress.isBlank()) "Delivery location is required" else null,
+                    colors = colors
+                )
+            }
             // When delivery location gains focus & phone is filled → collapse phone
             LaunchedEffect(showToDropdown) {
                 if (showToDropdown && formState.recipientPhone.isNotBlank()) {
@@ -1216,6 +1283,135 @@ private fun CompactLocationField(
                     Spacer(Modifier.width(12.dp))
                     Text(value, color = colors.textPrimary, fontSize = 15.sp, modifier = Modifier.weight(1f))
                     Icon(Icons.Filled.Edit, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Pickup/delivery picker constrained to the stops of the driver's active trip.
+ * Used when a driver creates a package during an active trip — the location
+ * must be a trip stop (pickup: current/unpassed or the stop just left;
+ * delivery: current/unpassed stops only). Free text is not accepted: selecting
+ * is what fills the form value.
+ */
+@Composable
+private fun TripStopPickerField(
+    value: String,
+    label: String,
+    hint: String,
+    icon: @Composable () -> Unit,
+    options: List<com.gocavgo.ikuriye.viewmodel.TripPackageLocation>,
+    onSelect: (com.gocavgo.ikuriye.viewmodel.TripPackageLocation) -> Unit,
+    isError: Boolean,
+    errorText: String?,
+    colors: com.gocavgo.ikuriye.ui.theme.DriversColors
+) {
+    var isEditing by remember { mutableStateOf(value.isBlank()) }
+    var query by remember { mutableStateOf("") }
+    var isFocused by remember { mutableStateOf(false) }
+    val filtered = remember(query, options) {
+        if (query.isBlank()) options
+        else options.filter {
+            it.name.contains(query, ignoreCase = true) || it.subtitle.contains(query, ignoreCase = true)
+        }
+    }
+    val showDropdown = isFocused
+
+    if (!isEditing && value.isNotBlank()) {
+        // ── Selected stop (compact card, tap to change) ──
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = colors.surface,
+            border = BorderStroke(1.dp, colors.divider),
+            onClick = { isEditing = true; query = "" }
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                icon()
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("On your trip", color = colors.textSecondary, fontSize = 11.sp)
+                    Text(value, color = colors.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Icon(Icons.Filled.Edit, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
+            }
+        }
+        return
+    }
+
+    // ── Picker: type to filter the trip stops, then pick one ──
+    Box {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { isFocused = it.isFocused },
+            label = { Text(label) },
+            placeholder = { Text(hint) },
+            leadingIcon = { icon() },
+            singleLine = true,
+            isError = isError,
+            supportingText = if (isError && errorText != null) { { Text(errorText) } } else null,
+            shape = RoundedCornerShape(12.dp),
+            trailingIcon = {
+                Icon(
+                    Icons.Filled.KeyboardArrowDown, null,
+                    tint = colors.textSecondary, modifier = Modifier.size(20.dp)
+                )
+            }
+        )
+        if (showDropdown) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surface,
+                border = BorderStroke(1.dp, colors.divider),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset(y = 62.dp)
+            ) {
+                Column(Modifier.padding(vertical = 4.dp)) {
+                    filtered.forEach { option ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 1.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            color = colors.surface,
+                            onClick = {
+                                onSelect(option)
+                                query = ""
+                                isEditing = false
+                                isFocused = false
+                            }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Place, null, tint = colors.green, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(option.name, color = colors.textPrimary, fontSize = 14.sp)
+                                    if (option.subtitle.isNotBlank()) {
+                                        Text(option.subtitle, color = colors.textSecondary, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (filtered.isEmpty()) {
+                        Text(
+                            "No stop matches that name",
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
+                    }
                 }
             }
         }

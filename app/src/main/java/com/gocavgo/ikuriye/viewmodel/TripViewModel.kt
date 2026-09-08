@@ -815,7 +815,18 @@ class TripViewModel : ViewModel() {
         SettingsRepository.saveKeepScreenAwake(next)
     }
 
+    /**
+     * Driver "+" dispatch.
+     * - Active trip  → create a package whose pickup/drop-off are constrained to
+     *   the trip's eligible stops (see refreshDriverPackageLocations).
+     * - No active trip → create a trip (requires a car; see openDriverCreateTrip).
+     */
     fun openDriverCreatePackage() {
+        if (!_state.value.hasActiveTrip) {
+            openDriverCreateTrip()
+            return
+        }
+        refreshDriverPackageLocations()
         _state.update { it.copy(isDriverCreatingPackage = true) }
         saveNavigationState()
     }
@@ -823,6 +834,412 @@ class TripViewModel : ViewModel() {
     fun closeDriverCreatePackage() {
         _state.update { it.copy(isDriverCreatingPackage = false) }
         saveNavigationState()
+    }
+
+    // ── Package creation on the active trip ───────────────────────────────────
+
+    /**
+     * Recomputes the pickup/drop-off options offered while creating a package
+     * during an active trip, based on the trip's stops and progress:
+     *
+     * - Pickup (origin) may be any stop the driver has not passed yet, plus the
+     *   last stop he just passed (he may still be at it). If nothing has been
+     *   passed yet the driver is still at the trip origin, so every stop except
+     *   the final destination is available. Once the trip departs and the first
+     *   waypoint is passed, the origin drops off.
+     * - Drop-off (destination) may only be a stop the driver has not passed
+     *   yet (current + upcoming stops, including the final destination).
+     *
+     * The route's origin/destination are included as options when the trip's
+     * waypoint list does not already contain them (deduped by name).
+     */
+    fun refreshDriverPackageLocations() {
+        val s = _state.value
+        val activeTrip = s.activeDriverTrip
+        val stops = s.trip.stops
+        val n = stops.size
+        // Index of the driver's current stop (0 = trip start, n = everything passed).
+        val cur = s.currentStopIndex.coerceIn(0, n)
+
+        if (!s.hasActiveTrip) {
+            _state.update {
+                it.copy(driverPackageOriginOptions = emptyList(), driverPackageDestinationOptions = emptyList())
+            }
+            return
+        }
+
+        val originName = activeTrip?.origin?.trim()?.takeIf { it.isNotBlank() }
+        val destinationName = activeTrip?.destination?.trim()?.takeIf { it.isNotBlank() }
+        val firstStopName = stops.firstOrNull()?.name?.trim()
+        val lastStopName = stops.lastOrNull()?.name?.trim()
+
+        fun sameName(a: String?, b: String?): Boolean =
+            !a.isNullOrBlank() && !b.isNullOrBlank() && a.equals(b, ignoreCase = true)
+
+        val originIsInStops = sameName(originName, firstStopName)
+        val destinationIsInStops = sameName(destinationName, lastStopName)
+
+        // Ordered trip locations: [route origin] + trip stops + [route destination],
+        // deduped by name. kind: 0 = origin, 1 = stop, 2 = final destination.
+        data class Entry(
+            val index: Int,        // stop index, or -1 for route origin, -2 for route destination
+            val kind: Int,
+            val name: String,
+            val lat: Double,
+            val lng: Double
+        )
+
+        val entries = mutableListOf<Entry>()
+        if (originName != null && !originIsInStops) {
+            entries.add(Entry(-1, 0, originName, activeTrip?.originLatitude ?: 0.0, activeTrip?.originLongitude ?: 0.0))
+        }
+        stops.forEachIndexed { i, stop -> entries.add(Entry(i, 1, stop.name, stop.lat, stop.lng)) }
+        if (destinationName != null && !destinationIsInStops) {
+            entries.add(Entry(-2, 2, destinationName, activeTrip?.destinationLatitude ?: 0.0, activeTrip?.destinationLongitude ?: 0.0))
+        }
+
+        // Fallback when the trip has no waypoint stops at all (express route):
+        // still offer origin → destination while the trip is active.
+        if (entries.isEmpty()) {
+            if (originName != null) {
+                entries.add(Entry(-1, 0, originName, activeTrip?.originLatitude ?: 0.0, activeTrip?.originLongitude ?: 0.0))
+            }
+            if (destinationName != null) {
+                entries.add(Entry(-2, 2, destinationName, activeTrip?.destinationLatitude ?: 0.0, activeTrip?.destinationLongitude ?: 0.0))
+            }
+        }
+
+        val origins = mutableListOf<TripPackageLocation>()
+        val destinations = mutableListOf<TripPackageLocation>()
+
+        entries.forEach { entry ->
+            val isRouteOrigin = entry.kind == 0
+            val isRouteDestination = entry.kind == 2
+            val stopIndex = entry.index
+            val isStop = entry.kind == 1
+            // True when this entry is the trip's starting location (whether it
+            // came from the route or is the first stop of the trip).
+            val isOriginEntry = isRouteOrigin ||
+                (isStop && stopIndex == 0 && (originName == null || originIsInStops))
+            // True when this entry is the trip's final destination (route
+            // destination or the last stop of the trip).
+            val isFinalEntry = isRouteDestination ||
+                (isStop && stopIndex == n - 1 && (destinationName == null || destinationIsInStops))
+
+            // Passed state: stop is passed when its index < cur; the route
+            // origin is treated as passed once the driver has left it (cur >= 1).
+            val passed = if (isStop) stopIndex < cur else isRouteOrigin && cur >= 1
+            val isCurrent = if (isStop) stopIndex == cur else isRouteOrigin && cur == 0
+            // Last stop the driver just passed (he may still be at it).
+            val isLastPassed = if (isStop) cur >= 1 && stopIndex == cur - 1 else isRouteOrigin && cur == 1
+
+            val role = when {
+                isRouteOrigin -> "Trip origin"
+                isRouteDestination -> "Trip destination"
+                isStop && stopIndex == 0 && (originName == null || originIsInStops) -> "Trip origin"
+                isStop && stopIndex == n - 1 && (destinationName == null || destinationIsInStops) -> "Trip destination"
+                else -> "Stop ${stopIndex + 1}"
+            }
+            val badge = when {
+                isCurrent -> " — your current stop"
+                isLastPassed && passed -> " — last stop passed"
+                else -> ""
+            }
+            val loc = TripPackageLocation(
+                index = entry.index,
+                name = entry.name,
+                subtitle = role + badge,
+                lat = entry.lat,
+                lng = entry.lng
+            )
+
+            // Pickup candidates: current + unpassed stops, never the trip's
+            // final destination (unless the driver is there), plus the last
+            // passed stop — the driver may still be at it.
+            val canPickupHere = when {
+                passed -> isLastPassed
+                isFinalEntry -> isCurrent
+                else -> true
+            }
+            if (canPickupHere) origins.add(loc)
+
+            // Drop-off candidates: only locations not passed yet (current +
+            // upcoming, incl. the final destination), never the trip origin.
+            if (!passed && !isOriginEntry) destinations.add(loc)
+        }
+
+        _state.update {
+            it.copy(
+                driverPackageOriginOptions = origins,
+                driverPackageDestinationOptions = destinations
+            )
+        }
+    }
+
+    /** User picked a trip stop as the package pickup location. */
+    fun selectDriverPackageOrigin(choice: TripPackageLocation) {
+        _state.update {
+            it.copy(createPackageForm = it.createPackageForm.copy(
+                fromAddress = choice.name,
+                originLatitude = choice.lat,
+                originLongitude = choice.lng,
+                originPlaceId = null
+            ))
+        }
+        saveCreatePackageDraft()
+    }
+
+    /** User picked a trip stop as the package delivery location. */
+    fun selectDriverPackageDestination(choice: TripPackageLocation) {
+        _state.update {
+            it.copy(createPackageForm = it.createPackageForm.copy(
+                toAddress = choice.name,
+                destLatitude = choice.lat,
+                destLongitude = choice.lng,
+                destPlaceId = null
+            ))
+        }
+        saveCreatePackageDraft()
+    }
+
+    // ── Driver Trip Creation (cavgotrips via gateway) ────────────────────────
+
+    /**
+     * Open the create-trip modal. Gated: only when the driver has no active trip
+     * AND a car is assigned to them.
+     */
+    fun openDriverCreateTrip() {
+        val s = _state.value
+        if (s.hasActiveTrip) {
+            viewModelScope.launch { _toastEvent.emit("You already have an active trip") }
+            return
+        }
+        if (!s.driverHasVehicle) {
+            // Re-check the assignment first — the worker fetch may still be in flight
+            // (or stale) when the driver taps "+" right after login.
+            viewModelScope.launch {
+                refreshDriverVehicle()
+                if (!_state.value.driverHasVehicle) {
+                    _toastEvent.emit("You have no car assigned to you")
+                } else {
+                    openDriverCreateTripModal()
+                }
+            }
+            return
+        }
+        openDriverCreateTripModal()
+    }
+
+    private fun openDriverCreateTripModal() {
+        _state.update {
+            it.copy(
+                isDriverCreatingTrip = true,
+                driverTripOriginSearch = "",
+                driverTripDestinationSearch = "",
+                driverTripOriginResults = emptyList(),
+                driverTripDestinationResults = emptyList(),
+                isSearchingDriverTripLocations = false,
+                driverRouteSearchResults = emptyList(),
+                isSearchingDriverRoutes = false,
+                driverSelectedRoute = null,
+                driverTripIsReversed = false,
+                driverTripDepartureTime = (System.currentTimeMillis() / 1000) + 3600, // default 1h from now
+                driverTripError = null
+            )
+        }
+    }
+
+    fun closeDriverCreateTrip() {
+        tripOriginSearchJob?.cancel()
+        tripDestSearchJob?.cancel()
+        routeSearchJob?.cancel()
+        _state.update { it.copy(isDriverCreatingTrip = false) }
+    }
+
+    fun setDriverTripReversed(reversed: Boolean) {
+        _state.update { it.copy(driverTripIsReversed = reversed) }
+    }
+
+    fun setDriverTripDepartureTime(epochSeconds: Long) {
+        _state.update { it.copy(driverTripDepartureTime = epochSeconds) }
+    }
+
+    /**
+     * Create the trip on cavgotrips, then refresh the active-trip state so the
+     * driver home screen immediately shows the new trip.
+     */
+    fun createDriverTrip() {
+        val s = _state.value
+        val route = s.driverSelectedRoute ?: run {
+            viewModelScope.launch { _toastEvent.emit("Select a route first") }
+            return
+        }
+        val vehicleId = s.vehicle.id ?: run {
+            viewModelScope.launch { _toastEvent.emit("You have no car assigned to you") }
+            return
+        }
+        val departure = s.driverTripDepartureTime ?: run {
+            viewModelScope.launch { _toastEvent.emit("Pick a departure time") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(isCreatingDriverTrip = true, driverTripError = null) }
+            val error = com.gocavgo.ikuriye.network.BackendStorage.createTrip(
+                routeId = route.id,
+                vehicleId = vehicleId,
+                departureTimeSeconds = departure,
+                isReversed = s.driverTripIsReversed
+            )
+            if (error == null) {
+                _state.update { it.copy(isCreatingDriverTrip = false, isDriverCreatingTrip = false) }
+                _toastEvent.emit("Trip created successfully")
+                loadDriverTrips()
+            } else {
+                _state.update { it.copy(isCreatingDriverTrip = false, driverTripError = error) }
+                _toastEvent.emit(error)
+            }
+        }
+    }
+
+    // ── Trip-modal location & route searches ────────────────────────────────
+
+    private var tripOriginSearchJob: kotlinx.coroutines.Job? = null
+    private var tripDestSearchJob: kotlinx.coroutines.Job? = null
+    private var routeSearchJob: kotlinx.coroutines.Job? = null
+
+    fun searchDriverTripOrigin(query: String) {
+        tripOriginSearchJob?.cancel()
+        _state.update { it.copy(driverTripOriginSearch = query, driverTripOriginResults = emptyList()) }
+        if (query.isBlank()) {
+            _state.update { it.copy(isSearchingDriverTripLocations = false) }
+            return
+        }
+        _state.update { it.copy(isSearchingDriverTripLocations = true) }
+        tripOriginSearchJob = viewModelScope.launch {
+            val results = com.gocavgo.ikuriye.network.BackendStorage.searchLocations(query)
+            _state.update { it.copy(
+                driverTripOriginResults = results.map { loc ->
+                    LocationSearchResult(
+                        id = loc.id,
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        customName = loc.customName,
+                        googlePlaceName = loc.googlePlaceName,
+                        province = loc.province,
+                        district = loc.district,
+                        placeId = loc.placeId,
+                        code = loc.code
+                    )
+                },
+                isSearchingDriverTripLocations = false
+            ) }
+        }
+    }
+
+    fun searchDriverTripDestination(query: String) {
+        tripDestSearchJob?.cancel()
+        _state.update { it.copy(driverTripDestinationSearch = query, driverTripDestinationResults = emptyList()) }
+        if (query.isBlank()) {
+            _state.update { it.copy(isSearchingDriverTripLocations = false) }
+            return
+        }
+        _state.update { it.copy(isSearchingDriverTripLocations = true) }
+        tripDestSearchJob = viewModelScope.launch {
+            val results = com.gocavgo.ikuriye.network.BackendStorage.searchLocations(query)
+            _state.update { it.copy(
+                driverTripDestinationResults = results.map { loc ->
+                    LocationSearchResult(
+                        id = loc.id,
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        customName = loc.customName,
+                        googlePlaceName = loc.googlePlaceName,
+                        province = loc.province,
+                        district = loc.district,
+                        placeId = loc.placeId,
+                        code = loc.code
+                    )
+                },
+                isSearchingDriverTripLocations = false
+            ) }
+        }
+    }
+
+    /** Select an origin location: pins its display name for the route search. */
+    fun selectDriverTripOrigin(loc: LocationSearchResult) {
+        _state.update {
+            it.copy(
+                driverTripOriginSearch = loc.displayName(),
+                driverTripOriginResults = emptyList(),
+                isSearchingDriverTripLocations = false,
+                driverSelectedRoute = null,
+                driverRouteSearchResults = emptyList()
+            )
+        }
+    }
+
+    /** Select a destination location: pins its display name for the route search. */
+    fun selectDriverTripDestination(loc: LocationSearchResult) {
+        _state.update {
+            it.copy(
+                driverTripDestinationSearch = loc.displayName(),
+                driverTripDestinationResults = emptyList(),
+                isSearchingDriverTripLocations = false,
+                driverSelectedRoute = null,
+                driverRouteSearchResults = emptyList()
+            )
+        }
+    }
+
+    fun clearDriverTripOrigin() {
+        tripOriginSearchJob?.cancel()
+        _state.update {
+            it.copy(
+                driverTripOriginSearch = "",
+                driverTripOriginResults = emptyList(),
+                isSearchingDriverTripLocations = false,
+                driverSelectedRoute = null,
+                driverRouteSearchResults = emptyList()
+            )
+        }
+    }
+
+    fun clearDriverTripDestination() {
+        tripDestSearchJob?.cancel()
+        _state.update {
+            it.copy(
+                driverTripDestinationSearch = "",
+                driverTripDestinationResults = emptyList(),
+                isSearchingDriverTripLocations = false,
+                driverSelectedRoute = null,
+                driverRouteSearchResults = emptyList()
+            )
+        }
+    }
+
+    /**
+     * Search routes matching the current origin + destination text.
+     * Runs automatically from the UI once both fields are filled.
+     */
+    fun searchDriverRoutes() {
+        routeSearchJob?.cancel()
+        val s = _state.value
+        val origin = s.driverTripOriginSearch.trim()
+        val destination = s.driverTripDestinationSearch.trim()
+        if (origin.isBlank() || destination.isBlank()) {
+            _state.update { it.copy(driverRouteSearchResults = emptyList(), isSearchingDriverRoutes = false) }
+            return
+        }
+        _state.update { it.copy(isSearchingDriverRoutes = true, driverRouteSearchResults = emptyList()) }
+        routeSearchJob = viewModelScope.launch {
+            val results = com.gocavgo.ikuriye.network.BackendStorage.searchRoutes(origin, destination)
+            _state.update { it.copy(driverRouteSearchResults = results, isSearchingDriverRoutes = false) }
+        }
+    }
+
+    /** User picked a route from the search results. */
+    fun selectDriverRoute(route: com.gocavgo.ikuriye.network.BackendStorage.DriverRoute) {
+        _state.update { it.copy(driverSelectedRoute = route) }
     }
 
     fun toggleDriverProfileMenu() {
@@ -1827,26 +2244,7 @@ class TripViewModel : ViewModel() {
             _state.update { it.copy(isLoadingDriverTrips = true) }
             try {
                 // Fetch driver profile + assigned vehicle from cavgomain
-                val worker = BackendStorage.fetchDriverWorker(userId)
-                if (worker != null) {
-                    val v = worker.vehicle
-                    _state.update {
-                        it.copy(
-                            driverProfile = it.driverProfile.copy(
-                                name = worker.name.ifBlank { it.driverProfile.name },
-                                phone = worker.phone ?: it.driverProfile.phone,
-                                email = worker.email ?: it.driverProfile.email
-                            ),
-                            vehicle = if (v != null) DriverVehicle(
-                                plateNumber = v.licensePlate ?: it.vehicle.plateNumber,
-                                model = listOfNotNull(v.make, v.model).joinToString(" ").ifBlank { it.vehicle.model },
-                                seats = v.capacity.takeIf { it > 0 } ?: it.vehicle.seats
-                            ) else it.vehicle
-                        )
-                    }
-                    // Set vehicle ID for MQTT publishing (publishes to vehicles/{carId}/location/batch)
-                    MqttLocationPublisher.vehicleId = worker.vehicle?.id?.toString()
-                }
+                refreshDriverVehicle()
                 // Fetch active trip (SCHEDULED or IN_PROGRESS)
                 val activeTrips = BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 1)
                 val activeTrip = activeTrips.trips.firstOrNull()
@@ -1877,10 +2275,43 @@ class TripViewModel : ViewModel() {
                         }
                     )
                 }
+                // Keep package pickup/drop-off choices in sync with trip progress
+                refreshDriverPackageLocations()
             } catch (e: Exception) {
                 Log.w(TAG, "loadDriverTrips failed: ${e.message}")
                 _state.update { it.copy(isLoadingDriverTrips = false) }
             }
+        }
+    }
+
+    /**
+     * Fetches the driver's worker profile + assigned vehicle from cavgomain and
+     * stores it in state (vehicle id, plate, model, seats + driverHasVehicle).
+     * Also keeps MQTT publishing pointed at the assigned vehicle.
+     */
+    private suspend fun refreshDriverVehicle() {
+        val userId = _state.value.authUser?.id?.toLongOrNull() ?: return
+        val worker = BackendStorage.fetchDriverWorker(userId)
+        if (worker != null) {
+            val v = worker.vehicle
+            _state.update {
+                it.copy(
+                    driverProfile = it.driverProfile.copy(
+                        name = worker.name.ifBlank { it.driverProfile.name },
+                        phone = worker.phone ?: it.driverProfile.phone,
+                        email = worker.email ?: it.driverProfile.email
+                    ),
+                    vehicle = if (v != null) DriverVehicle(
+                        id = v.id.takeIf { id -> id > 0 },
+                        plateNumber = v.licensePlate ?: it.vehicle.plateNumber,
+                        model = listOfNotNull(v.make, v.model).joinToString(" ").ifBlank { it.vehicle.model },
+                        seats = v.capacity.takeIf { it > 0 } ?: it.vehicle.seats
+                    ) else it.vehicle.copy(id = null),
+                    driverHasVehicle = v != null
+                )
+            }
+            // Set vehicle ID for MQTT publishing (publishes to vehicles/{carId}/location/batch)
+            MqttLocationPublisher.vehicleId = worker.vehicle?.id?.toString()
         }
     }
 
