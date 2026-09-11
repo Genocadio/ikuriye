@@ -128,6 +128,89 @@ object BackendStorage {
         }
     }
 
+    // ── Driver request ──────────────────────────────────────────────────────
+
+    /**
+     * Submit a driver request for the authenticated user.
+     * Calls POST /main/driver-requests with the company code.
+     * Uses the user's access token from NexxAuth.
+     * Returns null on success, or an error message on failure.
+     */
+    suspend fun submitDriverRequest(companyCode: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val accessToken = com.gocavgo.ikuriye.nexx.NexxAuth.getAccessToken()
+            if (accessToken.isNullOrBlank()) {
+                return@withContext "Not authenticated — please sign in again"
+            }
+            val jsonBody = JSONObject().put("companyCode", companyCode).toString()
+            val request = Request.Builder()
+                .url("$restBaseUrl/main/driver-requests")
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "application/json")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .build()
+            val response = httpClient.newCall(request).execute()
+            val responseBody = response.body?.string()
+            if (response.isSuccessful) {
+                Log.d(TAG, "submitDriverRequest OK: companyCode=$companyCode")
+                null
+            } else {
+                Log.w(TAG, "submitDriverRequest failed: HTTP ${response.code}: $responseBody")
+                val message = try {
+                    val json = JSONObject(responseBody ?: "")
+                    json.optString("message").ifBlank { json.optString("error") }
+                } catch (e: Exception) { "" }
+                message.ifBlank { "Failed to submit driver request (HTTP ${response.code})" }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "submitDriverRequest failed: ${e.message}")
+            "Failed to submit request: ${e.message}"
+        }
+    }
+
+    // ── Driver request status ──────────────────────────────────────────────
+
+    data class DriverRequestStatusResponse(
+        val id: Long?,
+        val status: String?,  // PENDING, APPROVED, REJECTED
+        val companyCode: String?,
+        val companyName: String?,
+        val rejectionReason: String?
+    )
+
+    /**
+     * Check if the authenticated user has an existing driver request.
+     * Returns the latest request status, or null if no request exists.
+     */
+    suspend fun getMyDriverRequestStatus(): DriverRequestStatusResponse? = withContext(Dispatchers.IO) {
+        try {
+            val accessToken = com.gocavgo.ikuriye.nexx.NexxAuth.getAccessToken()
+            if (accessToken.isNullOrBlank()) return@withContext null
+            val request = Request.Builder()
+                .url("$restBaseUrl/main/driver-requests/my-status")
+                .get()
+                .addHeader("Accept", "application/json")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .build()
+            val response = httpClient.newCall(request).execute()
+            val body = response.body?.string()
+            if (response.code == 204) return@withContext null  // No content = no request
+            if (!response.isSuccessful) return@withContext null
+            val json = JSONObject(body ?: return@withContext null)
+            DriverRequestStatusResponse(
+                id = json.optLong("id").takeIf { it > 0 },
+                status = json.optString("status", null),
+                companyCode = json.optString("companyCode", null),
+                companyName = json.optString("companyName", null),
+                rejectionReason = json.optString("rejectionReason", null)
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "getMyDriverRequestStatus failed: ${e.message}")
+            null
+        }
+    }
+
     // ── Driver trips (cavgotrips via gateway /navig/trips/driver/{id}) ────
 
     data class DriverTripWaypoint(

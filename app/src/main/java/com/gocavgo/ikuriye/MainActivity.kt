@@ -56,6 +56,7 @@ import com.gocavgo.ikuriye.ui.common.NoticesPanel
 import com.gocavgo.ikuriye.ui.common.PickupCodeDialog
 import com.gocavgo.ikuriye.ui.common.DeliveryConfirmationDialog
 import com.gocavgo.ikuriye.ui.common.FloatingCreatePanel
+import com.gocavgo.ikuriye.ui.common.RequestDriverDialog
 import com.gocavgo.ikuriye.ui.LoginScreen
 import com.gocavgo.ikuriye.ui.OtpVerificationScreen
 import com.gocavgo.ikuriye.ui.PipTripView
@@ -594,7 +595,9 @@ class MainActivity : ComponentActivity() {
                                         onConfirmDeliveryDirect = vm::openDeliveryConfirmationForPackage,
                                         onNoticesClick = vm::toggleNotices,
                                         noticeCount = state.noticeCount,
-                                        notices = state.notices
+                                        notices = state.notices,
+                                        onRequestDriver = vm::openRequestDriverDialog,
+                                        driverRequestStatus = state.driverRequestStatus
                                     )
                                 }
                             }
@@ -647,6 +650,16 @@ class MainActivity : ComponentActivity() {
                     onDismiss = vm::dismissNotices,
                     onNoticeClick = vm::openNoticeFromNotification
                 )
+
+                // ── Request Driver Dialog ──
+                if (state.showRequestDriverDialog) {
+                    RequestDriverDialog(
+                        onDismiss = vm::closeRequestDriverDialog,
+                        onSubmit = vm::submitDriverRequest,
+                        isLoading = state.isSubmittingDriverRequest,
+                        error = state.driverRequestError
+                    )
+                }
 
                 // ── FloatingCreatePanel overlay (driver side — active trip only;
                 // pickup/delivery are constrained to the active trip's stops) ──

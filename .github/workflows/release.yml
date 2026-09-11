@@ -31,6 +31,10 @@
         NEXXAUTH_BASE_URL: ${{ secrets.NEXXAUTH_BASE_URL }}
         NEXXAUTH_CLIENT_ID: ${{ secrets.NEXXAUTH_CLIENT_ID }}
 
+        MQTT_BROKER_URL: ${{ secrets.MQTT_BROKER_URL }}
+        MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+        MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
+
         KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -82,6 +86,9 @@
               CAVGO_BASE_URL
               NEXXAUTH_BASE_URL
               NEXXAUTH_CLIENT_ID
+              MQTT_BROKER_URL
+              MQTT_USERNAME
+              MQTT_PASSWORD
               KEYSTORE_BASE64
               KEYSTORE_PASSWORD
               KEY_ALIAS

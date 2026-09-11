@@ -221,6 +221,7 @@ class TripViewModel : ViewModel() {
                     }
                     else -> {
                         fetchClientPackages(isFreshLogin = false)
+                        checkDriverRequestStatus()
                     }
                 }
                 // Schedule background sync worker
@@ -473,6 +474,7 @@ class TripViewModel : ViewModel() {
                             )
                         }
                         fetchClientPackages(isFreshLogin = true)
+                        checkDriverRequestStatus()
                     }
                 }
                 // Start notice feed on fresh login with fresh subscription
@@ -1626,6 +1628,60 @@ class TripViewModel : ViewModel() {
 
     fun dismissClientMenus() {
         _state.update { it.copy(isClientProfileMenuOpen = false, isClientSettingsOpen = false) }
+    }
+
+    // ── Driver request ──────────────────────────────────────────────────────
+
+    /**
+     * Check if the user already has a driver request (pending/approved/rejected).
+     * Called after client login so the profile menu shows the right state.
+     */
+    fun checkDriverRequestStatus() {
+        viewModelScope.launch {
+            try {
+                val status = com.gocavgo.ikuriye.network.BackendStorage.getMyDriverRequestStatus()
+                _state.update { it.copy(driverRequestStatus = status?.status) }
+            } catch (e: Exception) {
+                // Non-critical — just leave status as null
+            }
+        }
+    }
+
+    fun openRequestDriverDialog() {
+        // Don't open if there's already a pending request
+        val currentStatus = _state.value.driverRequestStatus
+        if (currentStatus == "PENDING") {
+            viewModelScope.launch {
+                _toastEvent.emit("You already have a pending driver request. Please wait for approval.")
+            }
+            return
+        }
+        _state.update { it.copy(showRequestDriverDialog = true, driverRequestError = null, isClientProfileMenuOpen = false) }
+    }
+
+    fun closeRequestDriverDialog() {
+        _state.update { it.copy(showRequestDriverDialog = false, driverRequestError = null) }
+    }
+
+    fun submitDriverRequest(companyCode: String) {
+        if (companyCode.isBlank()) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSubmittingDriverRequest = true, driverRequestError = null) }
+            try {
+                val result = com.gocavgo.ikuriye.network.BackendStorage.submitDriverRequest(companyCode)
+                if (result == null) {
+                    _state.update { it.copy(
+                        isSubmittingDriverRequest = false,
+                        showRequestDriverDialog = false,
+                        driverRequestStatus = "PENDING"
+                    ) }
+                } else {
+                    _state.update { it.copy(isSubmittingDriverRequest = false, driverRequestError = result) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(isSubmittingDriverRequest = false, driverRequestError = e.message ?: "Failed to submit request") }
+            }
+        }
     }
 
     fun openCreatePackage() {

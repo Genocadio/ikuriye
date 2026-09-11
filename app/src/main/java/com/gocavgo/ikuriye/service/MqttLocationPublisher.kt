@@ -1,5 +1,6 @@
 package com.gocavgo.ikuriye.service
 
+import com.gocavgo.ikuriye.BuildConfig
 import android.content.Context
 import android.content.Intent
 import android.util.Log
@@ -34,9 +35,11 @@ object MqttLocationPublisher {
     private const val TAG = "MqttLocation"
 
     // ── Broker config ──────────────────────────────────────────────────────
-    private const val BROKER_URL = "ssl://123b850a73774bcd84d2019d168d7f13.s1.eu.hivemq.cloud:8883"
-    private const val USERNAME = "genoyves"
-    private const val PASSWORD = "Cadio*11."
+    // Supplied via secrets.properties / CI env at build time → BuildConfig.
+    // See secrets.properties.example (keys MQTT_BROKER_URL / MQTT_USERNAME / MQTT_PASSWORD).
+    private val brokerUrl: String get() = BuildConfig.MQTT_BROKER_URL
+    private val brokerUsername: String get() = BuildConfig.MQTT_USERNAME
+    private val brokerPassword: String get() = BuildConfig.MQTT_PASSWORD
 
     // ── Batching ───────────────────────────────────────────────────────────
     private const val BATCH_INTERVAL_MS = 10_000L     // flush every 10s when moving
@@ -249,13 +252,19 @@ object MqttLocationPublisher {
     private fun connect() {
         if (isShuttingDown || (isConnected && client?.isConnected == true)) return
 
+        // Broker must be configured in secrets.properties before any of this can work.
+        if (brokerUrl.isBlank() || brokerUsername.isBlank() || brokerPassword.isBlank()) {
+            Log.e(TAG, "MQTT broker not configured — set MQTT_BROKER_URL / MQTT_USERNAME / MQTT_PASSWORD in secrets.properties and rebuild.")
+            return
+        }
+
         synchronized(lock) {
             if (isShuttingDown || (isConnected && client?.isConnected == true)) return
 
             try { client?.close() } catch (_: Exception) {}
 
             val clientId = "ikuriye-${userId ?: System.currentTimeMillis()}"
-            client = MqttClient(BROKER_URL, clientId, MemoryPersistence())
+            client = MqttClient(brokerUrl, clientId, MemoryPersistence())
 
             val options = MqttConnectOptions().apply {
                 isCleanSession = true
@@ -263,11 +272,11 @@ object MqttLocationPublisher {
                 keepAliveInterval = 60
                 isAutomaticReconnect = false // We handle reconnect ourselves
                 maxInflight = 100
-                userName = USERNAME
-                password = PASSWORD.toCharArray()
+                userName = brokerUsername
+                password = brokerPassword.toCharArray()
                 mqttVersion = 4
 
-                if (BROKER_URL.startsWith("ssl://")) {
+                if (brokerUrl.startsWith("ssl://")) {
                     socketFactory = javax.net.ssl.SSLSocketFactory.getDefault()
                 }
             }

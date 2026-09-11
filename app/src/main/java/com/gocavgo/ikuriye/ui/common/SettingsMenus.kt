@@ -13,7 +13,10 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,7 +42,9 @@ fun ProfileQuickMenu(
     onLogoutClick: () -> Unit,
     onProfileClick: () -> Unit,
     modifier: Modifier = Modifier,
-    accentColorOverride: androidx.compose.ui.graphics.Color? = null
+    accentColorOverride: androidx.compose.ui.graphics.Color? = null,
+    onRequestDriver: (() -> Unit)? = null,
+    driverRequestStatus: String? = null,
 ) {
     val colors = LocalDriversColors.current
     val accent = accentColorOverride ?: colors.blue
@@ -77,6 +82,43 @@ fun ProfileQuickMenu(
                 }
             }
             HorizontalDivider(color = colors.divider)
+            if (onRequestDriver != null) {
+                when (driverRequestStatus) {
+                    null -> ProfileMenuButton("Request Driver", Icons.Filled.DirectionsCar, onRequestDriver)
+                    "PENDING" -> {
+                        TextButton(
+                            onClick = {}, enabled = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.DirectionsCar, null, tint = colors.amber, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text("⏳ Request Pending", color = colors.amber, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                    "APPROVED" -> {
+                        TextButton(
+                            onClick = {}, enabled = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.CheckCircle, null, tint = colors.green, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text("✓ Driver Approved", color = colors.green, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                    else -> {
+                        // REJECTED or unknown — allow re-requesting
+                        ProfileMenuButton("Request Driver", Icons.Filled.DirectionsCar, onRequestDriver)
+                    }
+                }
+            }
             ProfileMenuButton("Settings", Icons.Filled.Settings, onSettingsClick)
             ProfileMenuButton("Logout", Icons.AutoMirrored.Filled.Logout, onLogoutClick, danger = true)
         }
@@ -202,6 +244,87 @@ fun SettingsMenu(
             }
         }
     }
+}
+
+// ── Request Driver Dialog ──────────────────────────────────────────────────────
+
+@Composable
+fun RequestDriverDialog(
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit,
+    isLoading: Boolean = false,
+    error: String? = null,
+) {
+    val colors = LocalDriversColors.current
+    var companyCode by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        containerColor = colors.surface,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.DirectionsCar,
+                    null,
+                    tint = colors.blue,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Request Driver", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    "Enter your company code to request becoming a driver.",
+                    color = colors.textSecondary,
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(14.dp))
+                OutlinedTextField(
+                    value = companyCode,
+                    onValueChange = { companyCode = it.uppercase() },
+                    label = { Text("Company Code") },
+                    singleLine = true,
+                    enabled = !isLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.blue,
+                        cursorColor = colors.blue
+                    )
+                )
+                if (error != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(error, color = colors.red, fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(companyCode.trim()) },
+                enabled = companyCode.isNotBlank() && !isLoading,
+                colors = ButtonDefaults.buttonColors(containerColor = colors.blue),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = androidx.compose.ui.graphics.Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Submit")
+                }
+            }
+        },
+        dismissButton = {
+            if (!isLoading) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            }
+        }
+    )
 }
 
 // ── Theme pill ────────────────────────────────────────────────────────────────

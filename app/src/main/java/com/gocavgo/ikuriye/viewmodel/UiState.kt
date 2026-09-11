@@ -342,5 +342,10 @@ data class TripUiState(
     // Notices
     val showNoticesPanel: Boolean = false,
     val noticeCount: Int = 0,
-    val notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList()
+    val notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList(),
+    // Driver request
+    val showRequestDriverDialog: Boolean = false,
+    val isSubmittingDriverRequest: Boolean = false,
+    val driverRequestStatus: String? = null,  // null, "PENDING", "APPROVED", "REJECTED"
+    val driverRequestError: String? = null
 )

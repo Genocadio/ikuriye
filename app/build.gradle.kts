@@ -79,6 +79,12 @@ android {
         // Nexxauth console; org slug matches the organisation registered there.
         buildConfigField("String", "NEXXAUTH_BASE_URL", "\"${secret("NEXXAUTH_BASE_URL", "https://auth.med.rw/master")}\"")
         buildConfigField("String", "NEXXAUTH_CLIENT_ID", "\"${secret("NEXXAUTH_CLIENT_ID", "")}\"")
+        // HiveMQ MQTT broker — GPS location publishing (MqttLocationPublisher).
+        // Real credentials are secrets: they live ONLY in secrets.properties /
+        // CI env vars (same key names), never as defaults in this file.
+        buildConfigField("String", "MQTT_BROKER_URL", "\"${secret("MQTT_BROKER_URL", "")}\"")
+        buildConfigField("String", "MQTT_USERNAME", "\"${secret("MQTT_USERNAME", "")}\"")
+        buildConfigField("String", "MQTT_PASSWORD", "\"${secret("MQTT_PASSWORD", "")}\"")
     }
 
     signingConfigs {
