@@ -132,8 +132,11 @@ fun ClientHomeScreen(
     noticeCount: Int = 0,
     notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList(),
     onRequestDriver: (() -> Unit)? = null,
-    driverRequestStatus: String? = null
-) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onRejectTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, clientDataState, onConfirmDeliveryDirect = onConfirmDeliveryDirect, onNoticesClick = onNoticesClick, noticeCount = noticeCount, notices = notices, onRequestDriver = onRequestDriver, driverRequestStatus = driverRequestStatus)
+    driverRequestStatus: String? = null,
+    driverRequestCompanyCode: String? = null,
+    driverRequestCompanyName: String? = null,
+    driverRequestRejectionReason: String? = null
+) = ClientHomeScreenImpl(client, packages, themeMode, isClientProfileMenuOpen, isClientSettingsOpen, onCreatePackage, onTrackPackage, onLogout, onProfileMenuClick, onSettingsClick, onProfileClick, onThemeModeChange, isRefreshing, isInitialLoading, onRefresh, isLoadingMore, onLoadMore, onCloseSettings, onDismissMenus, onCreateTransfer, onConfirmTransfer, onRejectTransfer, onGeneratePickupCode, hasUnsavedDraft, packagesFetchedOnce, clientDataState, onConfirmDeliveryDirect = onConfirmDeliveryDirect, onNoticesClick = onNoticesClick, noticeCount = noticeCount, notices = notices, onRequestDriver = onRequestDriver, driverRequestStatus = driverRequestStatus, driverRequestCompanyCode = driverRequestCompanyCode, driverRequestCompanyName = driverRequestCompanyName, driverRequestRejectionReason = driverRequestRejectionReason)
 
 @Composable
 fun CreatePackageScreen(

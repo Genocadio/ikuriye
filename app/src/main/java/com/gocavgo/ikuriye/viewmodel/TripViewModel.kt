@@ -1616,6 +1616,11 @@ class TripViewModel : ViewModel() {
                 isClientSettingsOpen = false
             )
         }
+        // Refresh the driver-request status each time the menu opens so an
+        // approval/rejection is picked up quickly.
+        if (_state.value.isClientProfileMenuOpen) {
+            checkDriverRequestStatus()
+        }
     }
 
     fun openClientSettings() {
@@ -1635,12 +1640,47 @@ class TripViewModel : ViewModel() {
     /**
      * Check if the user already has a driver request (pending/approved/rejected).
      * Called after client login so the profile menu shows the right state.
+     *
+     * While the request is PENDING it keeps polling every few seconds so that,
+     * once a fleet manager approves, the app automatically refreshes the
+     * session/profile and flips the user to the DRIVER home — no re-login needed.
      */
     fun checkDriverRequestStatus() {
         viewModelScope.launch {
             try {
                 val status = com.gocavgo.ikuriye.network.BackendStorage.getMyDriverRequestStatus()
-                _state.update { it.copy(driverRequestStatus = status?.status) }
+                _state.update {
+                    it.copy(
+                        driverRequestStatus = status?.status,
+                        driverRequestCompanyCode = status?.companyCode,
+                        driverRequestCompanyName = status?.companyName,
+                        driverRequestRejectionReason = status?.rejectionReason
+                    )
+                }
+                when (status?.status) {
+                    "PENDING" -> {
+                        // Keep polling while awaiting approval.
+                        kotlinx.coroutines.delay(20_000)
+                        checkDriverRequestStatus()
+                    }
+                    "APPROVED" -> {
+                        if (_state.value.appRole != AppRole.DRIVER) {
+                            Log.i(TAG, "checkDriverRequestStatus: approved — refreshing session to pick up DRIVER role")
+                            val refreshed = NexxAuth.refreshSession()
+                            if (refreshed) {
+                                when (val result = AuthRepository.restoreSession()) {
+                                    is AuthResult.Success -> {
+                                        if (result.user.role.name == "DRIVER") {
+                                            applyUser(result.user)
+                                        }
+                                    }
+                                    else -> Log.w(TAG, "checkDriverRequestStatus: approved but profile resync did not succeed")
+                                }
+                            }
+                        }
+                    }
+                    else -> Unit
+                }
             } catch (e: Exception) {
                 // Non-critical — just leave status as null
             }

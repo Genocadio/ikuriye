@@ -597,7 +597,10 @@ class MainActivity : ComponentActivity() {
                                         noticeCount = state.noticeCount,
                                         notices = state.notices,
                                         onRequestDriver = vm::openRequestDriverDialog,
-                                        driverRequestStatus = state.driverRequestStatus
+                                        driverRequestStatus = state.driverRequestStatus,
+                                        driverRequestCompanyCode = state.driverRequestCompanyCode,
+                                        driverRequestCompanyName = state.driverRequestCompanyName,
+                                        driverRequestRejectionReason = state.driverRequestRejectionReason
                                     )
                                 }
                             }

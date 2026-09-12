@@ -109,7 +109,10 @@ fun ClientHomeScreen(
     noticeCount: Int = 0,
     notices: List<com.gocavgo.ikuriye.data.Notice> = emptyList(),
     onRequestDriver: (() -> Unit)? = null,
-    driverRequestStatus: String? = null
+    driverRequestStatus: String? = null,
+    driverRequestCompanyCode: String? = null,
+    driverRequestCompanyName: String? = null,
+    driverRequestRejectionReason: String? = null
 ) {
     val colors = LocalDriversColors.current
     var searchQuery by remember { mutableStateOf("") }
@@ -459,7 +462,10 @@ fun ClientHomeScreen(
                     onProfileClick = onProfileClick,
                     accentColorOverride = colors.green,
                     onRequestDriver = onRequestDriver,
-                    driverRequestStatus = driverRequestStatus
+                    driverRequestStatus = driverRequestStatus,
+                    driverRequestCompanyCode = driverRequestCompanyCode,
+                    driverRequestCompanyName = driverRequestCompanyName,
+                    driverRequestRejectionReason = driverRequestRejectionReason
                 )
             }
 

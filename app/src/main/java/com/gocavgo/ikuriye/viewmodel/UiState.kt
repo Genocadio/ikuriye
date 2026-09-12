@@ -347,5 +347,8 @@ data class TripUiState(
     val showRequestDriverDialog: Boolean = false,
     val isSubmittingDriverRequest: Boolean = false,
     val driverRequestStatus: String? = null,  // null, "PENDING", "APPROVED", "REJECTED"
+    val driverRequestCompanyCode: String? = null,
+    val driverRequestCompanyName: String? = null,
+    val driverRequestRejectionReason: String? = null,
     val driverRequestError: String? = null
 )

@@ -45,6 +45,9 @@ fun ProfileQuickMenu(
     accentColorOverride: androidx.compose.ui.graphics.Color? = null,
     onRequestDriver: (() -> Unit)? = null,
     driverRequestStatus: String? = null,
+    driverRequestCompanyCode: String? = null,
+    driverRequestCompanyName: String? = null,
+    driverRequestRejectionReason: String? = null,
 ) {
     val colors = LocalDriversColors.current
     val accent = accentColorOverride ?: colors.blue
@@ -98,6 +101,16 @@ fun ProfileQuickMenu(
                                 Text("⏳ Request Pending", color = colors.amber, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             }
                         }
+                        val companyLabel = listOfNotNull(
+                            driverRequestCompanyName?.takeIf { it.isNotBlank() },
+                            driverRequestCompanyCode?.takeIf { it.isNotBlank() }
+                        ).joinToString(" · ").ifBlank { "Your request must be approved by a fleet manager." }
+                        Text(
+                            companyLabel,
+                            color = colors.textSecondary,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 0.dp)
+                        )
                     }
                     "APPROVED" -> {
                         TextButton(
@@ -113,8 +126,32 @@ fun ProfileQuickMenu(
                             }
                         }
                     }
+                    "REJECTED" -> {
+                        TextButton(
+                            onClick = {}, enabled = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Cancel, null, tint = colors.red, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    driverRequestRejectionReason?.takeIf { it.isNotBlank() }
+                                        ?: "Driver Request Rejected",
+                                    color = colors.red,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        // Allow re-requesting after a rejection
+                        ProfileMenuButton("Request Driver", Icons.Filled.DirectionsCar, onRequestDriver)
+                    }
                     else -> {
-                        // REJECTED or unknown — allow re-requesting
+                        // No request / unknown — allow requesting
                         ProfileMenuButton("Request Driver", Icons.Filled.DirectionsCar, onRequestDriver)
                     }
                 }
