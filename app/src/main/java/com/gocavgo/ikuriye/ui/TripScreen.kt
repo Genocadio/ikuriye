@@ -113,7 +113,7 @@ fun TripScreen(
             return@Box
         }
 
-        TripContent(viewModel, vehiclePlate, onVehicleClick, onProfileClick)
+        TripContent(viewModel, vehiclePlate, onVehicleClick, onProfileClick, isVehicleMenuOpen = isVehicleMenuOpen, vehicle = vehicle)
 
         if (isVehicleMenuOpen || isProfileMenuOpen || isSettingsOpen) {
             Box(
@@ -176,7 +176,9 @@ fun TripContent(
     vehiclePlate: String,
     onVehicleClick: () -> Unit,
     onProfileClick: () -> Unit,
-    completedTrips: List<CompletedTrip> = emptyList()
+    completedTrips: List<CompletedTrip> = emptyList(),
+    isVehicleMenuOpen: Boolean = false,
+    vehicle: DriverVehicle = DriverVehicle()
 ) {
     val state by viewModel.state.collectAsState()
     val colors = LocalDriversColors.current
@@ -235,7 +237,7 @@ fun TripContent(
                 }
 
                 // ── Top bar (compact on landscape) ──
-                TripTopBar(state, vehiclePlate, onProfileClick, onVehicleClick, landscape = landscape)
+                TripTopBar(state, vehiclePlate, onProfileClick, onVehicleClick, isVehicleMenuOpen = isVehicleMenuOpen, vehicle = vehicle, landscape = landscape)
 
                 Spacer(Modifier.height(12.dp))
 
@@ -298,6 +300,8 @@ fun TripTopBar(
     vehiclePlate: String,
     onProfileClick: () -> Unit,
     onVehicleClick: () -> Unit,
+    isVehicleMenuOpen: Boolean = false,
+    vehicle: DriverVehicle = DriverVehicle(),
     landscape: Boolean = false
 ) {
     val colors = LocalDriversColors.current
@@ -353,9 +357,9 @@ fun TripTopBar(
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp)
-                .padding(top = 12.dp, bottom = 16.dp)
+                .padding(top = 6.dp, bottom = 16.dp)
         ) {
-            // Centered vehicle plate pill
+            // Centered vehicle plate pill — higher position
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
@@ -382,7 +386,49 @@ fun TripTopBar(
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            // Inline vehicle info from trip — type + remaining seats
+            if (isVehicleMenuOpen) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.surface,
+                    border = BorderStroke(1.dp, colors.divider)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // Vehicle type
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.LocalShipping, null, tint = colors.blue, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                vehicle.vehicleType ?: "—",
+                                color = colors.textPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        // Remaining seats from trip
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.EventSeat, null, tint = colors.green, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            val remaining = state.activeDriverTrip?.remainingSeats
+                            val total = state.activeDriverTrip?.seats ?: vehicle.seats
+                            Text(
+                                if (remaining != null) "$remaining / $total seats" else "$total seats",
+                                color = colors.textPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(

@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.ContentScale
@@ -148,13 +149,38 @@ fun DriverHomeScreen(
                         }
                     ) {
                     if (state.hasActiveTrip) {
-                        TripContent(
-                            viewModel       = viewModel,
-                            vehiclePlate    = vehicle.plateNumber,
-                            onVehicleClick  = onVehicleClick,
-                            onProfileClick  = onProfileClick,
-                            completedTrips  = completedTrips
-                        )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            // Active trip content — slightly dimmed when stale
+                            Box(modifier = Modifier.fillMaxSize().let { mod ->
+                                if (state.isTripDataStale) mod.graphicsLayer { alpha = 0.6f } else mod
+                            }) {
+                                TripContent(
+                                    viewModel       = viewModel,
+                                    vehiclePlate    = vehicle.plateNumber,
+                                    onVehicleClick  = onVehicleClick,
+                                    onProfileClick  = onProfileClick,
+                                    completedTrips  = completedTrips
+                                )
+                            }
+                            // Disconnect banner at top
+                            if (state.isTripDataStale) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = colors.amber.copy(alpha = 0.15f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, colors.amber.copy(alpha = 0.4f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Filled.CloudOff, null, tint = colors.amber, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Connection lost — showing cached data", color = colors.textPrimary, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
                     } else if (!state.driverHasVehicle) {
                         // No vehicle assigned — silent gate, show message
                         LazyColumn(

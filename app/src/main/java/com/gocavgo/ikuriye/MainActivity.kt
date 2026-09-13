@@ -160,6 +160,7 @@ class MainActivity : ComponentActivity() {
 
         AuthRepository.init(this)
         PackageCache.init(this)
+        com.gocavgo.ikuriye.data.DriverTripCache.init(this)
         SettingsRepository.init(this)
 
         setContent {

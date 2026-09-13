@@ -616,17 +616,8 @@ private fun LocationStep(
             errorText = if (showErrors && formState.fromAddress.isBlank()) "Choose a pickup stop on your trip" else null,
             colors = colors
         )
-        Text(
-            "Pickup must be a stop on your active trip.",
-            color = colors.textSecondary, fontSize = 11.sp,
-            modifier = Modifier.padding(top = 2.dp)
-        )
     } else if (showSenderFields) {
-        Text(
-            "No eligible pickup stops remain on your active trip.",
-            color = colors.textSecondary, fontSize = 12.sp,
-            modifier = Modifier.padding(vertical = 4.dp)
-        )
+        // No eligible pickup stops — empty state handled by caller
     } else {
         LocationSearchField(
             value = formState.fromAddress,
@@ -759,17 +750,8 @@ private fun LocationStep(
                     errorText = if (showErrors && formState.toAddress.isBlank()) "Choose a delivery stop on your trip" else null,
                     colors = colors
                 )
-                Text(
-                    "Delivery must be an upcoming stop on your trip.",
-                    color = colors.textSecondary, fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
             } else if (showSenderFields) {
-                Text(
-                    "No eligible delivery stops remain on your active trip.",
-                    color = colors.textSecondary, fontSize = 12.sp,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
+                // No eligible delivery stops — empty state handled by caller
             } else {
                 LocationSearchField(
                     value = formState.toAddress,

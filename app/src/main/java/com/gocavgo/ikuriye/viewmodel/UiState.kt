@@ -217,6 +217,7 @@ data class TripUiState(
     val driverTripHistory: List<BackendStorage.DriverTrip> = emptyList(),
     val driverMetrics: BackendStorage.DriverMetrics? = null,
     val isLoadingDriverTrips: Boolean = false,
+    val isTripDataStale: Boolean = false, // true when network is offline and displayed data may be stale
     // Settings
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val isPipEnabled: Boolean = false,

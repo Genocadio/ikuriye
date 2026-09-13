@@ -209,12 +209,14 @@ object PackageRepository {
                     Log.d(TAG, "createPackage: media=${pkg.details?.media?.map { "${it?.url} (${it?.mimeType})" }}")
                 }
             }
-            if (errors != null && errors.isNotEmpty()) {
+            // Prefer data over errors: GraphQL can return both when the mutation
+            // succeeded but non-critical resolvers threw (e.g. notification side-effects).
+            if (data != null) {
+                mapCreatedPackage(data.createPackage)
+            } else if (errors != null && errors.isNotEmpty()) {
                 val errorMsgs = errors.joinToString("; ") { it.message ?: "unknown" }
                 Log.e(TAG, "createPackage: GraphQL errors — $errorMsgs")
                 null
-            } else if (data != null) {
-                mapCreatedPackage(data.createPackage)
             } else {
                 Log.e(TAG, "createPackage: no data")
                 null
