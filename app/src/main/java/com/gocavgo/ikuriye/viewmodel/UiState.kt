@@ -95,6 +95,7 @@ data class DriverVehicle(
     val id: Long? = null,
     val plateNumber: String = "RAC 482K",
     val model: String = "Toyota Hiace",
+    val vehicleType: String? = null,
     val seats: Int = 14
 )
 

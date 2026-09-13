@@ -16,6 +16,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -44,6 +45,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -153,7 +155,8 @@ fun DriverHomeScreen(
                             onProfileClick  = onProfileClick,
                             completedTrips  = completedTrips
                         )
-                    } else {
+                    } else if (!state.driverHasVehicle) {
+                        // No vehicle assigned — silent gate, show message
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(top = 48.dp, bottom = 90.dp, start = 16.dp, end = 16.dp),
@@ -164,15 +167,81 @@ fun DriverHomeScreen(
                                     modifier = Modifier.fillMaxWidth().padding(bottom = if (completedTrips.isEmpty()) 0.dp else 24.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    Icon(Icons.Filled.LocalShipping, null, tint = colors.textSecondary, modifier = Modifier.size(56.dp))
+                                    Icon(Icons.Filled.DirectionsCar, null, tint = colors.amber, modifier = Modifier.size(56.dp))
                                     Spacer(Modifier.height(12.dp))
-                                    Text("No active trip", color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                    Text("No vehicle assigned", color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                     Spacer(Modifier.height(4.dp))
-                                    Text("Your next assigned route will appear here", color = colors.textSecondary, fontSize = 13.sp)
+                                    Text("Contact your fleet manager to assign a vehicle", color = colors.textSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
+                                }
+                            }
+                        }
+                    } else {
+                        // Has vehicle but no active trip — show vehicle info + history
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(top = 48.dp, bottom = 90.dp, start = 16.dp, end = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
+                        ) {
+                            item {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onVehicleClick() }
+                                        .padding(16.dp)
+                                        .background(colors.surface, RoundedCornerShape(14.dp))
+                                        .border(1.dp, colors.divider, RoundedCornerShape(14.dp))
+                                        .padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .background(colors.blue.copy(alpha = 0.14f), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(24.dp))
+                                    }
+                                    Spacer(Modifier.height(10.dp))
+                                    Text(vehicle.plateNumber, color = colors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(vehicle.model, color = colors.textSecondary, fontSize = 13.sp)
+                                    Spacer(Modifier.height(6.dp))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        vehicle.vehicleType?.let { type ->
+                                            AssistChip(
+                                                onClick = {},
+                                                label = { Text(type, fontSize = 11.sp) },
+                                                leadingIcon = { Icon(Icons.Filled.DirectionsCar, null, modifier = Modifier.size(14.dp)) }
+                                            )
+                                        }
+                                        AssistChip(
+                                            onClick = {},
+                                            label = { Text("${vehicle.seats} seats", fontSize = 11.sp) },
+                                            leadingIcon = { Icon(Icons.Filled.EventSeat, null, modifier = Modifier.size(14.dp)) }
+                                        )
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("Tap to view details", color = colors.blue, fontSize = 11.sp)
+                                }
+                            }
+                            item {
+                                Spacer(Modifier.height(16.dp))
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(Icons.Filled.LocalShipping, null, tint = colors.textSecondary, modifier = Modifier.size(40.dp))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("No active trip", color = colors.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text("Create a trip to start driving", color = colors.textSecondary, fontSize = 12.sp)
                                 }
                             }
                             if (completedTrips.isNotEmpty()) {
-                                item { CompletedTripsHistorySection(trips = completedTrips) }
+                                item {
+                                    Spacer(Modifier.height(16.dp))
+                                    CompletedTripsHistorySection(trips = completedTrips)
+                                }
                             }
                         }
                     }

@@ -412,16 +412,7 @@ class MainActivity : ComponentActivity() {
                                 signInPrefillEmail = state.signInPrefillEmail,
                                 onClearSignInPrefill = vm::clearSignInPrefill
                             )
-                        } else if (!state.driverCompanyGateLoaded || state.driverCompanyGate == DriverCompanyGate.UNKNOWN) {
-                            BackHandler { }
-                            DriverCompanyGateScreen(
-                                gate = DriverCompanyGate.UNKNOWN,
-                                evaluating = true,
-                                error = state.driverCompanyGateError,
-                                onRetry = vm::refreshDriverCompanyGate,
-                                onLogout = vm::logout
-                            )
-                        } else if (state.driverCompanyGate != DriverCompanyGate.APPROVED) {
+                        } else if (state.driverCompanyGateLoaded && state.driverCompanyGate != DriverCompanyGate.APPROVED) {
                             BackHandler { }
                             DriverCompanyGateScreen(
                                 gate = state.driverCompanyGate,

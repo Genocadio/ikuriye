@@ -44,6 +44,7 @@ import com.gocavgo.ikuriye.nexx.NexxAuth
 import com.gocavgo.ikuriye.network.ApolloClientProvider
 import com.gocavgo.ikuriye.network.BackendStorage
 import com.gocavgo.ikuriye.service.MqttLocationPublisher
+import com.gocavgo.ikuriye.service.MqttTripSubscriber
 import com.gocavgo.ikuriye.service.LocationKeepaliveWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -77,6 +78,11 @@ class TripViewModel : ViewModel() {
     // Polls the driver-request status while a DRIVER awaits company approval so
     // the company gate unlocks automatically the moment a fleet manager approves.
     private var driverCompanyGatePoll: kotlinx.coroutines.Job? = null
+
+    // Polls for new trips every 30 s when the driver has no active trip.
+    // Acts as a fallback when the MQTT trip subscriber is unavailable.
+    private var tripPollJob: kotlinx.coroutines.Job? = null
+    private val TRIP_POLL_INTERVAL_MS = 30_000L
 
     // Invalidates in-flight data loads whenever the session/role changes so a
     // slow fetch that completes AFTER logout cannot repopulate the logged-out UI.
@@ -520,6 +526,9 @@ class TripViewModel : ViewModel() {
         bumpSessionGeneration()
         driverCompanyGatePoll?.cancel()
         driverCompanyGatePoll = null
+        tripPollJob?.cancel()
+        tripPollJob = null
+        MqttTripSubscriber.disconnect()
         NoticeRepository.stop()
         stopPackageSubscription()
         autoShownDeliveryNotices.clear()
@@ -2480,11 +2489,45 @@ class TripViewModel : ViewModel() {
                 }
                 // Keep package pickup/drop-off choices in sync with trip progress
                 refreshDriverPackageLocations()
+                // Subscribe to MQTT trip channel for real-time updates
+                val vId = _state.value.vehicle.id
+                if (vId != null && vId > 0) {
+                    MqttTripSubscriber.subscribe(vId.toString()) {
+                        // Trip event received via MQTT — refresh trips
+                        viewModelScope.launch { loadDriverTrips() }
+                    }
+                }
+                // Start polling fallback when there is no active trip
+                if (!_state.value.hasActiveTrip) {
+                    startTripPolling()
+                } else {
+                    stopTripPolling()
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "loadDriverTrips failed: ${e.message}")
                 _state.update { it.copy(isLoadingDriverTrips = false) }
             }
         }
+    }
+
+    // ── Trip polling fallback ───────────────────────────────────────────────
+
+    private fun startTripPolling() {
+        tripPollJob?.cancel()
+        tripPollJob = viewModelScope.launch {
+            while (true) {
+                delay(TRIP_POLL_INTERVAL_MS)
+                if (_state.value.appRole != AppRole.DRIVER) break
+                if (_state.value.hasActiveTrip) break // active trip found, stop polling
+                Log.d(TAG, "Trip poll: checking for new trips")
+                loadDriverTrips()
+            }
+        }
+    }
+
+    private fun stopTripPolling() {
+        tripPollJob?.cancel()
+        tripPollJob = null
     }
 
     /**
@@ -2508,6 +2551,7 @@ class TripViewModel : ViewModel() {
                         id = v.id.takeIf { id -> id > 0 },
                         plateNumber = v.licensePlate ?: it.vehicle.plateNumber,
                         model = listOfNotNull(v.make, v.model).joinToString(" ").ifBlank { it.vehicle.model },
+                        vehicleType = v.vehicleType ?: it.vehicle.vehicleType,
                         seats = v.capacity.takeIf { it > 0 } ?: it.vehicle.seats
                     ) else it.vehicle.copy(id = null),
                     driverHasVehicle = v != null

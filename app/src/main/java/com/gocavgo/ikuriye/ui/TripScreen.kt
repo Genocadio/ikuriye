@@ -444,6 +444,10 @@ fun VehicleDetailsMenu(
 
             HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 12.dp))
             MenuInfoRow("Model", vehicle.model, Icons.Filled.DirectionsCar)
+            if (!vehicle.vehicleType.isNullOrBlank()) {
+                Spacer(Modifier.height(10.dp))
+                MenuInfoRow("Type", vehicle.vehicleType, Icons.Filled.LocalShipping)
+            }
             Spacer(Modifier.height(10.dp))
             MenuInfoRow("Seat size", "${vehicle.seats} seats", Icons.Filled.EventSeat)
         }

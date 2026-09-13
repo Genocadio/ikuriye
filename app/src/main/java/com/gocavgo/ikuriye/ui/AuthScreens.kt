@@ -718,6 +718,10 @@ fun VehicleScreen(
 
                 Spacer(Modifier.height(18.dp))
                 VehicleInfoRow("Model", vehicle.model, Icons.Filled.DirectionsCar)
+                if (!vehicle.vehicleType.isNullOrBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    VehicleInfoRow("Type", vehicle.vehicleType, Icons.Filled.LocalShipping)
+                }
                 HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 12.dp))
                 VehicleInfoRow("Seat size", "${vehicle.seats} seats", Icons.Filled.EventSeat)
             }

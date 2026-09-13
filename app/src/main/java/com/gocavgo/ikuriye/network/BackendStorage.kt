@@ -61,7 +61,7 @@ object BackendStorage {
      */
     private val restBaseUrl: String = BuildConfig.REST_BASE_URL
 
-    // ── Driver profile (cavgomain via gateway /main/internal/api) ────────
+    // ── Driver profile + vehicle (cavgomain via gateway /main/vehicles/driver/{id}) ──
 
     data class DriverWorkerResponse(
         val id: String,
@@ -87,40 +87,57 @@ object BackendStorage {
     )
 
     /**
-     * Fetch the driver's worker profile (including assigned vehicle) from cavgomain.
-     * Uses the internal API which requires no auth header (service-to-service).
+     * Fetch the driver's assigned vehicle from cavgomain via the authenticated
+     * vehicle endpoint. Returns a [DriverWorkerResponse] with vehicle data and
+     * the driver profile extracted from the nested driver object.
+     *
+     * Uses GET /main/vehicles/driver/{id} which returns VehicleResponseDto:
+     * { id, licensePlate, make, model, capacity, isOnline, status, vehicleType,
+     *   driver: { firstName, lastName, email, phone, role, licenseNumber, ... } }
      */
     suspend fun fetchDriverWorker(driverId: Long): DriverWorkerResponse? = withContext(Dispatchers.IO) {
         try {
-            val url = "$restBaseUrl/main/internal/api/workers/$driverId"
-            val request = Request.Builder().url(url).get().build()
+            val accessToken = NexxAuth.getAccessToken()
+            if (accessToken.isNullOrBlank()) {
+                Log.w(TAG, "fetchDriverWorker: no access token")
+                return@withContext null
+            }
+            val url = "$restBaseUrl/main/vehicles/driver/$driverId"
+            val request = Request.Builder().url(url).get()
+                .addHeader("Authorization", "Bearer $accessToken")
+                .build()
             val response = httpClient.newCall(request).execute()
             val body = response.body?.string() ?: return@withContext null
             if (!response.isSuccessful) {
-                Log.w(TAG, "fetchDriverWorker failed: HTTP ${response.code}")
+                Log.w(TAG, "fetchDriverWorker failed: HTTP ${response.code}: $body")
                 return@withContext null
             }
             val json = JSONObject(body)
-            val vehicleJson = json.optJSONObject("vehicle")
+            val vehicleJson = json
+            val driverJson = json.optJSONObject("driver")
             DriverWorkerResponse(
-                id = json.optString("id", ""),
-                name = json.optString("name", ""),
-                phone = json.optString("phone", null),
-                email = json.optString("email", null),
-                licenseNumber = json.optString("licenseNumber", null),
-                status = json.optString("status", null),
-                role = json.optString("role", null),
-                vehicle = if (vehicleJson != null) DriverVehicleResponse(
+                id = driverJson?.optString("id", null)
+                    ?: driverId.toString(),
+                name = listOfNotNull(
+                    driverJson?.optString("firstName", null),
+                    driverJson?.optString("lastName", null)
+                ).joinToString(" ").ifBlank { "" },
+                phone = driverJson?.optString("phone", null),
+                email = driverJson?.optString("email", null),
+                licenseNumber = driverJson?.optString("licenseNumber", null),
+                status = driverJson?.optString("status", null),
+                role = driverJson?.optString("role", null),
+                vehicle = DriverVehicleResponse(
                     id = vehicleJson.optLong("id", 0),
                     make = vehicleJson.optString("make", null),
                     model = vehicleJson.optString("model", null),
                     capacity = vehicleJson.optInt("capacity", 0),
                     licensePlate = vehicleJson.optString("licensePlate", null),
-                    vehicleType = vehicleJson.optString("vehicleType", null),
+                    vehicleType = if (vehicleJson.has("vehicleType")) vehicleJson.optString("vehicleType", null) else null,
                     status = vehicleJson.optString("status", null),
                     isOnline = if (vehicleJson.has("isOnline")) vehicleJson.optBoolean("isOnline") else null,
                     lastOnlineAt = vehicleJson.optString("lastOnlineAt", null)
-                ) else null
+                )
             )
         } catch (e: Exception) {
             Log.w(TAG, "fetchDriverWorker failed: ${e.message}")
