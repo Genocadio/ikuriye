@@ -66,6 +66,7 @@ import com.gocavgo.ikuriye.ui.TrackPackageScreen
 import com.gocavgo.ikuriye.ui.driver.AcceptTransferCodeDialog
 import com.gocavgo.ikuriye.ui.driver.ConfirmTransferDialog
 import com.gocavgo.ikuriye.ui.driver.CreateTripPanel
+import com.gocavgo.ikuriye.ui.driver.DriverCompanyGateScreen
 import com.gocavgo.ikuriye.ui.driver.RejectTransferDialog
 import com.gocavgo.ikuriye.ui.driver.RequestTransferDialog
 import com.gocavgo.ikuriye.ui.driver.SecureTransferCodeRevealDialog
@@ -74,6 +75,7 @@ import com.gocavgo.ikuriye.ui.theme.IkuriyeTheme
 import com.gocavgo.ikuriye.ui.theme.LocalDriversColors
 import com.gocavgo.ikuriye.viewmodel.AppRole
 import com.gocavgo.ikuriye.viewmodel.AppThemeMode
+import com.gocavgo.ikuriye.viewmodel.DriverCompanyGate
 import com.gocavgo.ikuriye.viewmodel.DriverProfile
 import com.gocavgo.ikuriye.viewmodel.TripViewModel
 
@@ -409,6 +411,28 @@ class MainActivity : ComponentActivity() {
                                 onHideForgotPassword = vm::hideForgotPassword,
                                 signInPrefillEmail = state.signInPrefillEmail,
                                 onClearSignInPrefill = vm::clearSignInPrefill
+                            )
+                        } else if (!state.driverCompanyGateLoaded || state.driverCompanyGate == DriverCompanyGate.UNKNOWN) {
+                            BackHandler { }
+                            DriverCompanyGateScreen(
+                                gate = DriverCompanyGate.UNKNOWN,
+                                evaluating = true,
+                                error = state.driverCompanyGateError,
+                                onRetry = vm::refreshDriverCompanyGate,
+                                onLogout = vm::logout
+                            )
+                        } else if (state.driverCompanyGate != DriverCompanyGate.APPROVED) {
+                            BackHandler { }
+                            DriverCompanyGateScreen(
+                                gate = state.driverCompanyGate,
+                                companyName = state.driverCompanyName,
+                                companyCode = state.driverCompanyCode,
+                                rejectionReason = state.driverCompanyRejectionReason,
+                                isSubmitting = state.isSubmittingDriverCompanyRequest,
+                                error = state.driverCompanyGateError,
+                                onSubmit = vm::submitDriverCompanyRequest,
+                                onRetry = vm::refreshDriverCompanyGate,
+                                onLogout = vm::logout
                             )
                         } else if (state.isProfileOpen) {
                             BackHandler { vm.closeProfile() }

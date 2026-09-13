@@ -274,11 +274,50 @@ object BackendStorage {
                 Log.w(TAG, "fetchDriverTrips failed: HTTP ${response.code}: $body")
                 return@withContext DriverTripsResponse(emptyList(), 0, null)
             }
-            val json = JSONObject(body)
-            val tripsArray = json.optJSONArray("trips")
-            Log.d(TAG, "fetchDriverTrips OK: driver=$driverId status=$status → ${tripsArray?.length() ?: 0} trips (total=${json.optLong("total", 0)})")
-            if (tripsArray == null) return@withContext DriverTripsResponse(emptyList(), 0, null)
-            val trips = mutableListOf<DriverTrip>()
+            Log.d(TAG, "fetchDriverTrips OK: driver=$driverId status=$status")
+            parseDriverTrips(JSONObject(body))
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchDriverTrips failed: ${e.message}")
+            DriverTripsResponse(emptyList(), 0, null)
+        }
+    }
+
+    /**
+     * Fetch trips for a specific vehicle (the driver's currently assigned car) from
+     * cavgotrips via the gateway.
+     * The active trip belongs to the CAR (vehicle_id), so it is keyed by vehicle — a
+     * driver swapped onto a car mid-trip must still see that car's active trip.
+     * @param status Optional filter: SCHEDULED, IN_PROGRESS, COMPLETED, etc.
+     */
+    suspend fun fetchVehicleTrips(vehicleId: Long, status: String? = null, limit: Int = 50): DriverTripsResponse = withContext(Dispatchers.IO) {
+        try {
+            val statusParam = if (!status.isNullOrBlank()) "&status=$status" else ""
+            val url = "$restBaseUrl/navig/trips/vehicle/$vehicleId?limit=$limit&offset=0$statusParam"
+            val request = Request.Builder().url(url).get().build()
+            val response = httpClient.newCall(request).execute()
+            val body = response.body?.string() ?: return@withContext DriverTripsResponse(emptyList(), 0, null)
+            if (!response.isSuccessful) {
+                Log.w(TAG, "fetchVehicleTrips failed: HTTP ${response.code}: $body")
+                return@withContext DriverTripsResponse(emptyList(), 0, null)
+            }
+            Log.d(TAG, "fetchVehicleTrips OK: vehicle=$vehicleId status=$status")
+            parseDriverTrips(JSONObject(body))
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchVehicleTrips failed: ${e.message}")
+            DriverTripsResponse(emptyList(), 0, null)
+        }
+    }
+
+    /**
+     * Parse a trips payload shared by the driver and vehicle endpoints. Both return
+     * {"trips": [...], "total": n, "metrics": {...}} with the same trip shape.
+     */
+    private fun parseDriverTrips(json: JSONObject): DriverTripsResponse {
+        val tripsArray = json.optJSONArray("trips")
+        Log.d(TAG, "parseDriverTrips → ${tripsArray?.length() ?: 0} trips (total=${json.optLong("total", 0)})")
+        if (tripsArray == null) return DriverTripsResponse(emptyList(), 0, null)
+        val trips = mutableListOf<DriverTrip>()
+        try {
             for (i in 0 until tripsArray.length()) {
                 val t = tripsArray.getJSONObject(i)
                 val route = t.optJSONObject("route")
@@ -349,10 +388,10 @@ object BackendStorage {
                 monthlyTrips = metricsJson.optLong("monthly_trips", 0),
                 currentActiveTrip = if (metricsJson.has("current_active_trip")) metricsJson.optLong("current_active_trip") else null
             ) else null
-            DriverTripsResponse(trips, json.optLong("total", 0), metrics)
+            return DriverTripsResponse(trips, json.optLong("total", 0), metrics)
         } catch (e: Exception) {
-            Log.w(TAG, "fetchDriverTrips failed: ${e.message}")
-            DriverTripsResponse(emptyList(), 0, null)
+            Log.w(TAG, "parseDriverTrips failed: ${e.message}")
+            return DriverTripsResponse(emptyList(), 0, null)
         }
     }
 

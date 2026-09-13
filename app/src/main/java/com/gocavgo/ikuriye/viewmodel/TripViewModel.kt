@@ -46,6 +46,7 @@ import com.gocavgo.ikuriye.network.BackendStorage
 import com.gocavgo.ikuriye.service.MqttLocationPublisher
 import com.gocavgo.ikuriye.service.LocationKeepaliveWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -72,6 +73,10 @@ class TripViewModel : ViewModel() {
     // ── New package subscription (driver-side real-time) ────────────────────
     private var subscriptionJob: kotlinx.coroutines.Job? = null
     private var transferSubscriptionJob: kotlinx.coroutines.Job? = null
+
+    // Polls the driver-request status while a DRIVER awaits company approval so
+    // the company gate unlocks automatically the moment a fleet manager approves.
+    private var driverCompanyGatePoll: kotlinx.coroutines.Job? = null
 
     // Invalidates in-flight data loads whenever the session/role changes so a
     // slow fetch that completes AFTER logout cannot repopulate the logged-out UI.
@@ -218,6 +223,7 @@ class TripViewModel : ViewModel() {
                     "DRIVER" -> {
                         preloadDriverPackages()
                         startPackageSubscription()
+                        refreshDriverCompanyGate()
                     }
                     else -> {
                         fetchClientPackages(isFreshLogin = false)
@@ -311,6 +317,8 @@ class TripViewModel : ViewModel() {
                 loadDriverTrips()
                 // Start real-time subscription for new package transfers
                 startPackageSubscription()
+                // DRIVER users must belong to a company — lock/unlock accordingly
+                refreshDriverCompanyGate()
             }
             else -> {
                 _state.update {
@@ -455,6 +463,7 @@ class TripViewModel : ViewModel() {
                                 )
                             )
                         }
+                        refreshDriverCompanyGate()
                     }
                     else -> {
                         _state.update {
@@ -509,6 +518,8 @@ class TripViewModel : ViewModel() {
 
     fun logout() {
         bumpSessionGeneration()
+        driverCompanyGatePoll?.cancel()
+        driverCompanyGatePoll = null
         NoticeRepository.stop()
         stopPackageSubscription()
         autoShownDeliveryNotices.clear()
@@ -547,7 +558,14 @@ class TripViewModel : ViewModel() {
                 clientPackagesFetchedOnce = false,
                 isClientInitialLoading = false,
                 driverCurrentPackages = emptyList(),
-                driverAvailableOffers = emptyList()
+                driverAvailableOffers = emptyList(),
+                driverCompanyGateLoaded = false,
+                driverCompanyGate = DriverCompanyGate.UNKNOWN,
+                driverCompanyName = null,
+                driverCompanyCode = null,
+                driverCompanyRejectionReason = null,
+                isSubmittingDriverCompanyRequest = false,
+                driverCompanyGateError = null
             )
         }
     }
@@ -1724,6 +1742,88 @@ class TripViewModel : ViewModel() {
         }
     }
 
+    // ── Driver company gate ────────────────────────────────────────────────
+
+    /**
+     * Evaluates the DRIVER company gate: a DRIVER-role user must have an
+     * APPROVED driver request (i.e. belong to a company) before the app unlocks.
+     * - APPROVED → gate opens, driver home is shown
+     * - PENDING  → gate shows the "waiting for approval" screen and keeps polling
+     * - REJECTED → gate shows the rejection screen (user is kept out)
+     * - null     → gate shows the request-company form
+     */
+    fun refreshDriverCompanyGate() {
+        if (_state.value.appRole != AppRole.DRIVER) return
+        driverCompanyGatePoll?.cancel()
+        driverCompanyGatePoll = viewModelScope.launch {
+            try {
+                val status = BackendStorage.getMyDriverRequestStatus()
+                val gate = when (status?.status) {
+                    "APPROVED" -> DriverCompanyGate.APPROVED
+                    "PENDING" -> DriverCompanyGate.PENDING
+                    "REJECTED" -> DriverCompanyGate.REJECTED
+                    else -> DriverCompanyGate.REQUEST
+                }
+                _state.update {
+                    it.copy(
+                        driverCompanyGate = gate,
+                        driverCompanyGateLoaded = true,
+                        driverCompanyName = status?.companyName,
+                        driverCompanyCode = status?.companyCode,
+                        driverCompanyRejectionReason = status?.rejectionReason,
+                        driverCompanyGateError = null
+                    )
+                }
+                if (gate == DriverCompanyGate.PENDING && _state.value.appRole == AppRole.DRIVER) {
+                    // Keep polling while awaiting approval so the app unlocks
+                    // automatically once a fleet manager approves the request.
+                    delay(20_000)
+                    refreshDriverCompanyGate()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshDriverCompanyGate failed: ${e.message}")
+                _state.update {
+                    it.copy(
+                        driverCompanyGate = DriverCompanyGate.UNKNOWN,
+                        driverCompanyGateLoaded = true,
+                        driverCompanyGateError = "Could not check your company status. Check your connection and try again."
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Submits a company request from the driver gate screen (same backend as the
+     * client-side "Request Driver" flow — POST /main/driver-requests).
+     */
+    fun submitDriverCompanyRequest(companyCode: String) {
+        if (companyCode.isBlank() || _state.value.isSubmittingDriverCompanyRequest) return
+        viewModelScope.launch {
+            _state.update { it.copy(isSubmittingDriverCompanyRequest = true, driverCompanyGateError = null) }
+            try {
+                val result = BackendStorage.submitDriverRequest(companyCode)
+                if (result == null) {
+                    _state.update {
+                        it.copy(
+                            isSubmittingDriverCompanyRequest = false,
+                            driverCompanyGate = DriverCompanyGate.PENDING,
+                            driverCompanyGateLoaded = true,
+                            driverCompanyCode = companyCode,
+                            driverCompanyName = null,
+                            driverCompanyRejectionReason = null
+                        )
+                    }
+                    refreshDriverCompanyGate()
+                } else {
+                    _state.update { it.copy(isSubmittingDriverCompanyRequest = false, driverCompanyGateError = result) }
+                }
+            } catch (e: Exception) {
+                _state.update { it.copy(isSubmittingDriverCompanyRequest = false, driverCompanyGateError = e.message ?: "Failed to submit request") }
+            }
+        }
+    }
+
     fun openCreatePackage() {
         _state.update { it.copy(isCreatingPackage = true, isTrackingPackage = false) }
         saveNavigationState()
@@ -2341,8 +2441,15 @@ class TripViewModel : ViewModel() {
             try {
                 // Fetch driver profile + assigned vehicle from cavgomain
                 refreshDriverVehicle()
-                // Fetch active trip (SCHEDULED or IN_PROGRESS)
-                val activeTrips = BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 1)
+                // Fetch active trip keyed by the ASSIGNED CAR (vehicle_id): a driver
+                // swapped onto a car mid-trip must still see that car's active trip.
+                // Fall back to a driver-keyed query only when no car is assigned.
+                val assignedVehicleId = _state.value.vehicle.id
+                val activeTrips = if (assignedVehicleId != null && assignedVehicleId > 0) {
+                    BackendStorage.fetchVehicleTrips(assignedVehicleId, "SCHEDULED,IN_PROGRESS", limit = 1)
+                } else {
+                    BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 1)
+                }
                 val activeTrip = activeTrips.trips.firstOrNull()
                 // Fetch completed trips for history
                 val historyTrips = BackendStorage.fetchDriverTrips(userId, "COMPLETED", limit = 20)

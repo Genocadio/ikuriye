@@ -145,6 +145,19 @@ enum class AppThemeMode { SYSTEM, LIGHT, DARK }
 enum class AppRole { NONE, DRIVER, CLIENT }
 
 /**
+ * Company gate for DRIVER-role users. A driver must belong to a company
+ * (i.e. have an APPROVED driver request) before they may use the app; the app
+ * locks them to a request screen otherwise.
+ *
+ * - UNKNOWN: status not loaded yet (shows a spinner / error + retry)
+ * - REQUEST: no request yet — show the request-company form
+ * - PENDING: request submitted — wait for approval
+ * - REJECTED: request rejected — kept out (with reason), may re-request
+ * - APPROVED: linked to a company — driver home is unlocked
+ */
+enum class DriverCompanyGate { UNKNOWN, REQUEST, PENDING, REJECTED, APPROVED }
+
+/**
  * Tracks whether we have definitive knowledge of the user's package data.
  * Used to decide when to auto-open the create-package modal.
  *
@@ -350,5 +363,13 @@ data class TripUiState(
     val driverRequestCompanyCode: String? = null,
     val driverRequestCompanyName: String? = null,
     val driverRequestRejectionReason: String? = null,
-    val driverRequestError: String? = null
+    val driverRequestError: String? = null,
+    // Driver company gate (role DRIVER must belong to a company to use the app)
+    val driverCompanyGateLoaded: Boolean = false,
+    val driverCompanyGate: DriverCompanyGate = DriverCompanyGate.UNKNOWN,
+    val driverCompanyName: String? = null,
+    val driverCompanyCode: String? = null,
+    val driverCompanyRejectionReason: String? = null,
+    val isSubmittingDriverCompanyRequest: Boolean = false,
+    val driverCompanyGateError: String? = null
 )
