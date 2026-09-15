@@ -108,17 +108,25 @@ object DriverTripCache {
 
     // ── Serialization ──────────────────────────────────────────────────────────
 
+    private fun putSafeDouble(json: JSONObject, key: String, value: Double?) {
+        if (value != null && !value.isNaN() && !value.isInfinite()) {
+            json.put(key, value)
+        } else {
+            json.put(key, JSONObject.NULL)
+        }
+    }
+
     private fun tripToJson(trip: BackendStorage.DriverTrip): JSONObject {
         val wpArr = JSONArray()
         trip.waypoints.forEach { wp ->
             wpArr.put(JSONObject().apply {
                 put("locationName", wp.locationName ?: "")
-                put("latitude", wp.latitude)
-                put("longitude", wp.longitude)
+                putSafeDouble(this, "latitude", wp.latitude)
+                putSafeDouble(this, "longitude", wp.longitude)
                 put("isPassed", wp.isPassed)
                 put("isNext", wp.isNext)
-                wp.remainingDistance?.let { put("remainingDistance", it) }
-                wp.remainingTime?.let { put("remainingTime", it) }
+                wp.remainingDistance?.let { putSafeDouble(this, "remainingDistance", it) }
+                wp.remainingTime?.let { putSafeDouble(this, "remainingTime", it) }
             })
         }
         return JSONObject().apply {
@@ -126,15 +134,15 @@ object DriverTripCache {
             put("status", trip.status ?: "")
             put("origin", trip.origin ?: "")
             put("destination", trip.destination ?: "")
-            trip.originLatitude?.let { put("originLatitude", it) } ?: put("originLatitude", JSONObject.NULL)
-            trip.originLongitude?.let { put("originLongitude", it) } ?: put("originLongitude", JSONObject.NULL)
-            trip.destinationLatitude?.let { put("destinationLatitude", it) } ?: put("destinationLatitude", JSONObject.NULL)
-            trip.destinationLongitude?.let { put("destinationLongitude", it) } ?: put("destinationLongitude", JSONObject.NULL)
+            putSafeDouble(this, "originLatitude", trip.originLatitude)
+            putSafeDouble(this, "originLongitude", trip.originLongitude)
+            putSafeDouble(this, "destinationLatitude", trip.destinationLatitude)
+            putSafeDouble(this, "destinationLongitude", trip.destinationLongitude)
             put("routeName", trip.routeName ?: "")
             trip.departureTime?.let { put("departureTime", it) } ?: put("departureTime", JSONObject.NULL)
-            trip.currentLatitude?.let { put("currentLatitude", it) } ?: put("currentLatitude", JSONObject.NULL)
-            trip.currentLongitude?.let { put("currentLongitude", it) } ?: put("currentLongitude", JSONObject.NULL)
-            trip.currentSpeed?.let { put("currentSpeed", it) } ?: put("currentSpeed", JSONObject.NULL)
+            putSafeDouble(this, "currentLatitude", trip.currentLatitude)
+            putSafeDouble(this, "currentLongitude", trip.currentLongitude)
+            putSafeDouble(this, "currentSpeed", trip.currentSpeed)
             trip.seats?.let { put("seats", it) } ?: put("seats", JSONObject.NULL)
             trip.remainingSeats?.let { put("remainingSeats", it) } ?: put("remainingSeats", JSONObject.NULL)
             put("vehicleLicensePlate", trip.vehicleLicensePlate ?: "")
@@ -146,7 +154,7 @@ object DriverTripCache {
 
     private fun metricsToJson(m: BackendStorage.DriverMetrics): JSONObject = JSONObject().apply {
         put("totalTrips", m.totalTrips)
-        put("totalKilometers", m.totalKilometers)
+        putSafeDouble(this, "totalKilometers", m.totalKilometers)
         put("dailyTrips", m.dailyTrips)
         put("monthlyTrips", m.monthlyTrips)
         m.currentActiveTrip?.let { put("currentActiveTrip", it) } ?: put("currentActiveTrip", JSONObject.NULL)

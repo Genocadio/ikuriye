@@ -64,7 +64,24 @@ object MqttLocationPublisher {
     @Volatile private var reconnectAttempt = 0
 
     @Volatile var vehicleId: String? = null
+        set(value) {
+            val old = field
+            field = value
+            if (old != value) {
+                if (!value.isNullOrBlank()) {
+                    Log.i(TAG, "Vehicle topic activated: vehicles/$value/location/batch")
+                } else {
+                    Log.i(TAG, "Vehicle topic deactivated — sending to user topic only")
+                }
+            }
+        }
     @Volatile var userId: String? = null
+        set(value) {
+            field = value
+            if (!value.isNullOrBlank() && !isConnected && !isShuttingDown) {
+                executor.execute { connect() }
+            }
+        }
 
     /** In-memory batch buffer — flushed to MQTT or SQLite on interval. */
     private val batchBuffer = mutableListOf<GpsPointQueue.GpsPoint>()
@@ -80,6 +97,9 @@ object MqttLocationPublisher {
         gpsQueue = GpsPointQueue(context.applicationContext)
         startBatchFlusher()
         Log.i(TAG, "Initialized — queue size: ${gpsQueue?.size()}")
+        if (!userId.isNullOrBlank() && !isConnected && !isShuttingDown) {
+            executor.execute { connect() }
+        }
     }
 
     fun disconnect() {
@@ -142,9 +162,18 @@ object MqttLocationPublisher {
     }
 
     private fun flushBatch() {
+        if (!isConnected && !userId.isNullOrBlank() && !isShuttingDown) {
+            connect()
+        }
+
         val points: List<GpsPointQueue.GpsPoint>
         synchronized(batchLock) {
-            if (batchBuffer.isEmpty()) return
+            if (batchBuffer.isEmpty()) {
+                if (isConnected) {
+                    drainOfflineQueue()
+                }
+                return
+            }
             points = batchBuffer.toList()
             batchBuffer.clear()
         }

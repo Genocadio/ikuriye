@@ -257,6 +257,7 @@ object BackendStorage {
         val seats: Int?,
         val remainingSeats: Int?,
         val waypoints: List<DriverTripWaypoint>,
+        val vehicleId: Long? = null,
         val vehicleLicensePlate: String?,
         val vehicleMake: String?,
         val vehicleModel: String?
@@ -391,6 +392,7 @@ object BackendStorage {
                         seats = if (t.has("seats")) t.optInt("seats") else null,
                         remainingSeats = if (t.has("remaining_seats")) t.optInt("remaining_seats") else null,
                         waypoints = waypoints,
+                        vehicleId = if (vehicle != null && vehicle.has("id")) vehicle.optLong("id", 0).takeIf { it > 0 } else null,
                         vehicleLicensePlate = vehicle?.optString("licensePlate", null),
                         vehicleMake = vehicle?.optString("make", null),
                         vehicleModel = vehicle?.optString("model", null)

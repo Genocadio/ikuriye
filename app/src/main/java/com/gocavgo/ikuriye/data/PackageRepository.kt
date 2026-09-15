@@ -888,11 +888,12 @@ object PackageRepository {
         }
     }
 
-    suspend fun requestTransfer(transferId: String): TransferInfo? {
+    suspend fun requestTransfer(transferId: String, tripId: String? = null): TransferInfo? {
         return try {
             val input = AcceptTransferInput(
                 transferId = transferId,
-                transferCode = Optional.Absent
+                transferCode = Optional.Absent,
+                tripId = if (tripId?.isNotBlank() == true) Optional.present(tripId) else Optional.Absent
             )
             val response = ApolloClientProvider.client
                 .mutation(RequestTransferMutation(input))
@@ -920,11 +921,16 @@ object PackageRepository {
         }
     }
 
-    suspend fun acceptPackageByTransfer(transferId: String, transferCode: String? = null): Boolean {
+    suspend fun acceptPackageByTransfer(
+        transferId: String,
+        transferCode: String? = null,
+        tripId: String? = null
+    ): Boolean {
         return try {
             val input = AcceptTransferInput(
                 transferId = transferId,
-                transferCode = if (transferCode?.isNotBlank() == true) Optional.present(transferCode) else Optional.Absent
+                transferCode = if (transferCode?.isNotBlank() == true) Optional.present(transferCode) else Optional.Absent,
+                tripId = if (tripId?.isNotBlank() == true) Optional.present(tripId) else Optional.Absent
             )
             val response = ApolloClientProvider.client
                 .mutation(AcceptPackageByTransferMutation(input))

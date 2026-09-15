@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -205,8 +206,8 @@ fun TripContent(
                 .fillMaxSize()
                 .verticalScroll(scrollState)
         ) {
-            // Top spacer so content starts behind status bar
-            Spacer(Modifier.height(gradientHeightDp + 8.dp))
+            // Top spacer (minimal so content starts higher up)
+            Spacer(Modifier.height(0.dp))
 
             Column(
                 modifier = Modifier
@@ -357,9 +358,10 @@ fun TripTopBar(
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp)
-                .padding(top = 6.dp, bottom = 16.dp)
+                .padding(top = 2.dp, bottom = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Centered vehicle plate pill — higher position
+            // Centered vehicle plate pill — height matched to notification FAB (top = 2.dp)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
@@ -371,7 +373,7 @@ fun TripTopBar(
                     border = BorderStroke(1.dp, colors.divider)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(18.dp))
@@ -430,20 +432,33 @@ fun TripTopBar(
 
             Spacer(Modifier.height(10.dp))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(34.dp).clip(CircleShape).background(colors.blue),
-                    contentAlignment = Alignment.Center
+            // Center-justified title & route label below plate pill
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(Icons.Filled.LocalShipping, null, tint = Color.White,
-                        modifier = Modifier.size(18.dp))
-                }
-                Spacer(Modifier.width(10.dp))
-                Column {
+                    Box(
+                        modifier = Modifier.size(28.dp).clip(CircleShape).background(colors.blue),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.LocalShipping, null, tint = Color.White,
+                            modifier = Modifier.size(15.dp))
+                    }
+                    Spacer(Modifier.width(8.dp))
                     Text("CaVgo Driver", color = colors.textSecondary, fontSize = 10.sp, letterSpacing = 1.5.sp)
-                    Text(state.trip.routeLabel, color = colors.textPrimary,
-                        fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    state.trip.routeLabel,
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }

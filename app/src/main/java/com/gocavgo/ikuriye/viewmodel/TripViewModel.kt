@@ -143,6 +143,9 @@ class TripViewModel : ViewModel() {
         // SharedPreferences-based cached user.
         val cached = AuthRepository.getCachedUser()
         if (cached != null) {
+            // Wire up MQTT publisher with user identity immediately on app launch
+            MqttLocationPublisher.userId = cached.id
+
             // Show UI immediately with cached user data.
             // CRITICAL: Do NOT call applyUser(cached) here because that triggers
             // fetchClientPackages() which makes a GraphQL request with null token
@@ -166,6 +169,14 @@ class TripViewModel : ViewModel() {
                 .ifBlank { if (cached.role.name == "DRIVER") "Driver" else "Customer" }
             when (cached.role.name) {
                 "DRIVER" -> {
+                    val cachedDriverState = com.gocavgo.ikuriye.data.DriverTripCache.get()
+                    val cachedVid = cachedDriverState?.vehicleId
+                    if (cachedVid != null && cachedVid > 0L) {
+                        MqttLocationPublisher.vehicleId = cachedVid.toString()
+                        MqttTripSubscriber.subscribe(cachedVid.toString()) {
+                            viewModelScope.launch { loadDriverTrips() }
+                        }
+                    }
                     _state.update {
                         it.copy(
                             driverProfile = DriverProfile(
@@ -174,7 +185,21 @@ class TripViewModel : ViewModel() {
                                 email = cached.email,
                                 username = cached.username,
                                 avatarUrl = cached.avatarUrl
-                            )
+                            ),
+                            vehicle = if (cachedDriverState != null && (cachedVid != null || cachedDriverState.vehiclePlate.isNotBlank())) DriverVehicle(
+                                id = cachedVid,
+                                plateNumber = cachedDriverState.vehiclePlate,
+                                model = cachedDriverState.vehicleModel,
+                                vehicleType = cachedDriverState.vehicleType,
+                                seats = cachedDriverState.vehicleSeats
+                            ) else it.vehicle,
+                            driverHasVehicle = cachedDriverState?.driverHasVehicle == true,
+                            activeDriverTrip = cachedDriverState?.activeTrip,
+                            driverTripHistory = cachedDriverState?.tripHistory ?: emptyList(),
+                            driverMetrics = cachedDriverState?.metrics,
+                            driverCompletedTrips = cachedDriverState?.driverCompletedTrips ?: emptyList(),
+                            hasActiveTrip = cachedDriverState?.activeTrip != null,
+                            trip = if (cachedDriverState?.activeTrip != null) mapBackendTripToTrip(cachedDriverState.activeTrip) else Trip(id = "", routeLabel = "", stops = emptyList())
                         )
                     }
                     restoreNavigationState()
@@ -2406,9 +2431,15 @@ class TripViewModel : ViewModel() {
      * Calls the server and moves the package from offers to active packages.
      */
     fun acceptAUTOTransfer(packageId: String, transferId: String) {
+        val s = _state.value
+        if (!s.hasActiveTrip) {
+            viewModelScope.launch { _toastEvent.emit("No active trip — you cannot accept package offers until a trip is scheduled for you") }
+            return
+        }
+        val tripId = s.activeDriverTrip?.id?.toString()
         viewModelScope.launch {
             _state.update { it.copy(isAcceptingTransfer = true) }
-            val success = PackageRepository.acceptPackageByTransfer(transferId)
+            val success = PackageRepository.acceptPackageByTransfer(transferId, tripId = tripId)
             if (success) {
                 _state.update { s2 ->
                     val offer = s2.driverAvailableOffers.find { it.id == packageId } ?: return@update s2
@@ -2466,17 +2497,16 @@ class TripViewModel : ViewModel() {
             val cached = withContext(Dispatchers.IO) { com.gocavgo.ikuriye.data.DriverTripCache.get() }
             if (cached != null) {
                 val c = cached
+                val cachedActiveTrip = if (c.driverHasVehicle) c.activeTrip else null
                 _state.update {
                     it.copy(
-                        activeDriverTrip = c.activeTrip,
+                        activeDriverTrip = cachedActiveTrip,
                         driverTripHistory = c.tripHistory,
                         driverMetrics = c.metrics,
-                        hasActiveTrip = c.activeTrip != null,
+                        hasActiveTrip = cachedActiveTrip != null,
                         isLoadingDriverTrips = false, // no spinner — user sees cached data
-                        trip = if (c.activeTrip != null) mapBackendTripToTrip(c.activeTrip) else Trip(id = "", routeLabel = "", stops = emptyList()),
-                        currentStopIndex = if (c.activeTrip != null) {
-                            c.activeTrip.waypoints.indexOfFirst { it.isNext }.coerceAtLeast(0)
-                        } else 0,
+                        trip = if (cachedActiveTrip != null) mapBackendTripToTrip(cachedActiveTrip) else Trip(id = "", routeLabel = "", stops = emptyList()),
+                        currentStopIndex = calculateCurrentStopIndex(cachedActiveTrip),
                         arrivedAtStop = false,
                         tripCompleted = false,
                         driverCompletedTrips = c.driverCompletedTrips
@@ -2515,23 +2545,34 @@ class TripViewModel : ViewModel() {
                     Log.w(TAG, "loadDriverTrips: offline, no cache")
                 }
                 _state.update { it.copy(isLoadingDriverTrips = false) }
-                if (!_state.value.hasActiveTrip) startTripPolling() else stopTripPolling()
+                startTripPolling()
                 return@launch
             }
 
             try {
                 // Fetch driver profile + assigned vehicle from cavgomain
                 refreshDriverVehicle()
-                // Fetch active trip keyed by the ASSIGNED CAR (vehicle_id)
-                val assignedVehicleId = _state.value.vehicle.id
-                val activeTrips = if (assignedVehicleId != null && assignedVehicleId > 0) {
-                    BackendStorage.fetchVehicleTrips(assignedVehicleId, "SCHEDULED,IN_PROGRESS", limit = 1)
-                } else {
-                    BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 1)
-                }
-                val activeTrip = activeTrips.trips.firstOrNull()
+
+                // Fetch driver's active/scheduled trips and completed history by driver ID
+                val driverTripsRes = BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 10)
                 val historyTrips = BackendStorage.fetchDriverTrips(userId, "COMPLETED", limit = 20)
-                Log.d(TAG, "loadDriverTrips OK: active=${activeTrip?.id ?: "none"}, history=${historyTrips.trips.size}")
+
+                // Only consider active trip if driver HAS an assigned car
+                val hasCar = _state.value.driverHasVehicle
+                val activeTrip: BackendStorage.DriverTrip? = if (hasCar) {
+                    // Priority 1: IN_PROGRESS trip
+                    driverTripsRes.trips.firstOrNull { it.status.equals("IN_PROGRESS", ignoreCase = true) }
+                        // Priority 2: Closest SCHEDULED trip by departure time
+                        ?: driverTripsRes.trips.filter { it.status.equals("SCHEDULED", ignoreCase = true) }
+                            .minByOrNull { it.departureTime ?: Long.MAX_VALUE }
+                        // Fallback to first trip if any
+                        ?: driverTripsRes.trips.firstOrNull()
+                } else {
+                    // No car assigned -> driver cannot have an active trip
+                    null
+                }
+
+                Log.d(TAG, "loadDriverTrips OK: hasCar=$hasCar, active=${activeTrip?.id ?: "none"}, history=${historyTrips.trips.size}")
 
                 val completedTrips = historyTrips.trips.map { t ->
                     CompletedTrip(
@@ -2546,14 +2587,12 @@ class TripViewModel : ViewModel() {
                     it.copy(
                         activeDriverTrip = activeTrip,
                         driverTripHistory = historyTrips.trips,
-                        driverMetrics = activeTrips.metrics ?: historyTrips.metrics,
+                        driverMetrics = driverTripsRes.metrics ?: historyTrips.metrics,
                         hasActiveTrip = activeTrip != null,
                         isLoadingDriverTrips = false,
                         isTripDataStale = false, // fresh data arrived
                         trip = if (activeTrip != null) mapBackendTripToTrip(activeTrip) else Trip(id = "", routeLabel = "", stops = emptyList()),
-                        currentStopIndex = if (activeTrip != null) {
-                            activeTrip.waypoints.indexOfFirst { it.isNext }.coerceAtLeast(0)
-                        } else 0,
+                        currentStopIndex = calculateCurrentStopIndex(activeTrip),
                         arrivedAtStop = false,
                         tripCompleted = false,
                         driverCompletedTrips = completedTrips
@@ -2566,7 +2605,7 @@ class TripViewModel : ViewModel() {
                         com.gocavgo.ikuriye.data.DriverTripCache.CachedDriverTripState(
                             activeTrip = activeTrip,
                             tripHistory = historyTrips.trips,
-                            metrics = activeTrips.metrics ?: historyTrips.metrics,
+                            metrics = driverTripsRes.metrics ?: historyTrips.metrics,
                             driverCompletedTrips = completedTrips,
                             vehicleId = v.id,
                             vehiclePlate = v.plateNumber,
@@ -2580,15 +2619,17 @@ class TripViewModel : ViewModel() {
 
                 // Keep package pickup/drop-off choices in sync
                 refreshDriverPackageLocations()
-                // Subscribe to MQTT trip channel for real-time updates
-                val vId = _state.value.vehicle.id
+                // Subscribe to MQTT trip channel for real-time updates & ensure vehicle publisher is active
+                val vId = _state.value.vehicle.id ?: activeTrip?.vehicleId ?: historyTrips.trips.firstOrNull()?.vehicleId
                 if (vId != null && vId > 0) {
-                    MqttTripSubscriber.subscribe(vId.toString()) {
+                    val vidStr = vId.toString()
+                    MqttLocationPublisher.vehicleId = vidStr
+                    MqttTripSubscriber.subscribe(vidStr) {
                         viewModelScope.launch { loadDriverTrips() }
                     }
                 }
-                // Start/stop polling based on active trip
-                if (!_state.value.hasActiveTrip) startTripPolling() else stopTripPolling()
+                // Ensure background polling is running with dynamic interval (3m no car / 5m idle car / 15m active trip)
+                startTripPolling()
             } catch (e: Exception) {
                 Log.w(TAG, "loadDriverTrips failed: ${e.message}")
                 // On network error, mark stale if we have cached data
@@ -2601,16 +2642,30 @@ class TripViewModel : ViewModel() {
         }
     }
 
-    // ── Trip polling fallback ───────────────────────────────────────────────
+    // ── Driver polling strategy ──────────────────────────────────────────────
+
+    private fun getDriverPollingIntervalMs(): Long {
+        val s = _state.value
+        return when {
+            s.hasActiveTrip -> 15 * 60 * 1000L       // 15 mins during active trip
+            s.driverHasVehicle -> 5 * 60 * 1000L     // 5 mins when driver has a car (idle)
+            else -> 3 * 60 * 1000L                   // 3 mins when driver has no car
+        }
+    }
 
     private fun startTripPolling() {
+        if (_state.value.appRole != AppRole.DRIVER) return
         tripPollJob?.cancel()
         tripPollJob = viewModelScope.launch {
             while (true) {
-                delay(TRIP_POLL_INTERVAL_MS)
                 if (_state.value.appRole != AppRole.DRIVER) break
-                if (_state.value.hasActiveTrip) break // active trip found, stop polling
-                Log.d(TAG, "Trip poll: checking for new trips")
+                val intervalMs = getDriverPollingIntervalMs()
+                val hasCar = _state.value.driverHasVehicle
+                val hasActiveTrip = _state.value.hasActiveTrip
+                Log.d(TAG, "Driver poll scheduled: next check in ${intervalMs / 1000}s (hasCar=$hasCar, activeTrip=$hasActiveTrip)")
+                delay(intervalMs)
+                if (_state.value.appRole != AppRole.DRIVER) break
+                Log.d(TAG, "Driver poll executing silently...")
                 loadDriverTrips()
             }
         }
@@ -2648,30 +2703,115 @@ class TripViewModel : ViewModel() {
                     driverHasVehicle = v != null
                 )
             }
-            // Set vehicle ID for MQTT publishing (publishes to vehicles/{carId}/location/batch)
-            MqttLocationPublisher.vehicleId = worker.vehicle?.id?.toString()
+            // Keep MQTT location publishing and trip subscriber pointed at the assigned vehicle
+            val assignedVid = worker.vehicle?.id?.takeIf { it > 0 }?.toString()
+            MqttLocationPublisher.vehicleId = assignedVid
+            if (assignedVid != null) {
+                MqttTripSubscriber.subscribe(assignedVid) {
+                    viewModelScope.launch { loadDriverTrips() }
+                }
+            } else {
+                MqttTripSubscriber.disconnect()
+            }
         }
+    }
+
+    private fun sameLocation(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        val normA = a.trim().lowercase()
+        val normB = b.trim().lowercase()
+        return normA == normB || normA.contains(normB) || normB.contains(normA)
+    }
+
+    private fun calculateCurrentStopIndex(backendTrip: BackendStorage.DriverTrip?): Int {
+        if (backendTrip == null) return 0
+        val isScheduled = backendTrip.status.equals("SCHEDULED", ignoreCase = true)
+        if (isScheduled) return 0 // SCHEDULED: driver is still at trip origin (index 0)
+
+        // IN_PROGRESS: first waypoint that is NOT passed (or isNext)
+        val unpassedIndex = backendTrip.waypoints.indexOfFirst { !it.isPassed || it.isNext }
+        return if (unpassedIndex != -1) unpassedIndex else (backendTrip.waypoints.size - 1).coerceAtLeast(0)
+    }
+
+    private fun ClientPackage.toTripPackage(): com.gocavgo.ikuriye.data.Package {
+        return com.gocavgo.ikuriye.data.Package(
+            id = this.id,
+            label = this.description.ifBlank { "Pkg #${this.trackingCode.ifBlank { this.id }}" },
+            recipient = this.recipientName.ifBlank { "Client" },
+            weight = this.weight.ifBlank { "Standard" },
+            notes = if (this.fragile) "Fragile" else ""
+        )
     }
 
     /**
      * Maps a backend DriverTrip to the existing Trip model used by the UI.
-     * Waypoints are converted to TripStops; passed waypoints are already marked.
+     * Correlates driver's active packages to pickups/dropoffs for each stop.
+     * When SCHEDULED: current stop is origin (index 0) with pickups only (no dropoffs).
+     * When IN_PROGRESS: current/upcoming stop is the next unpassed waypoint with correlated pickups and dropoffs.
      */
-    private fun mapBackendTripToTrip(backendTrip: BackendStorage.DriverTrip): Trip {
-        val stops = backendTrip.waypoints.mapIndexed { index, wp ->
-            TripStop(
-                id = index,
-                name = wp.locationName ?: "Stop ${index + 1}",
-                address = wp.locationName ?: "",
-                lat = wp.latitude,
-                lng = wp.longitude,
-                pickups = emptyList(),
-                dropoffs = emptyList()
+    private fun mapBackendTripToTrip(
+        backendTrip: BackendStorage.DriverTrip,
+        driverPackages: List<ClientPackage> = _state.value.driverCurrentPackages
+    ): Trip {
+        val isScheduled = backendTrip.status.equals("SCHEDULED", ignoreCase = true)
+
+        val waypoints = if (backendTrip.waypoints.isNotEmpty()) {
+            backendTrip.waypoints
+        } else {
+            listOfNotNull(
+                backendTrip.origin?.let {
+                    BackendStorage.DriverTripWaypoint(
+                        locationName = it,
+                        latitude = backendTrip.originLatitude ?: 0.0,
+                        longitude = backendTrip.originLongitude ?: 0.0,
+                        isPassed = false,
+                        isNext = true,
+                        remainingDistance = null,
+                        remainingTime = null
+                    )
+                },
+                backendTrip.destination?.let {
+                    BackendStorage.DriverTripWaypoint(
+                        locationName = it,
+                        latitude = backendTrip.destinationLatitude ?: 0.0,
+                        longitude = backendTrip.destinationLongitude ?: 0.0,
+                        isPassed = false,
+                        isNext = false,
+                        remainingDistance = null,
+                        remainingTime = null
+                    )
+                }
             )
         }
+
+        val stops = waypoints.mapIndexed { index, wp ->
+            val stopName = wp.locationName ?: "Stop ${index + 1}"
+            val pickups = driverPackages
+                .filter { sameLocation(it.fromAddress, stopName) }
+                .map { it.toTripPackage() }
+            val dropoffs = if (isScheduled) {
+                emptyList() // No dropoffs when trip is SCHEDULED (not departed yet)
+            } else {
+                driverPackages
+                    .filter { sameLocation(it.toAddress, stopName) }
+                    .map { it.toTripPackage() }
+            }
+
+            TripStop(
+                id = index,
+                name = stopName,
+                address = stopName,
+                lat = wp.latitude,
+                lng = wp.longitude,
+                pickups = pickups,
+                dropoffs = dropoffs
+            )
+        }
+
         val label = listOfNotNull(backendTrip.origin, backendTrip.destination)
             .joinToString(" → ")
             .ifBlank { backendTrip.routeName ?: "Trip #${backendTrip.id}" }
+
         return Trip(id = backendTrip.id.toString(), routeLabel = label, stops = stops)
     }
 
@@ -2693,8 +2833,10 @@ class TripViewModel : ViewModel() {
             // Local-first: show cached driver packages immediately
             val cached = withContext(Dispatchers.IO) { PackageCache.getDriverCached() }
             if (cached != null) {
+                val activeCached = _state.value.activeDriverTrip
                 _state.update { it.copy(
                     driverCurrentPackages = cached.items,
+                    trip = if (activeCached != null) mapBackendTripToTrip(activeCached, cached.items) else it.trip,
                     driverCurrentPage = 0,
                     driverCurrentHasMore = cached.currentPage + 1 < cached.totalPages,
                     driverCurrentTotalPages = cached.totalPages,
@@ -2711,8 +2853,10 @@ class TripViewModel : ViewModel() {
                     is FetchPackagesResult.Success -> {
                         withContext(Dispatchers.IO) { PackageCache.saveDriver(current.page) }
                         if (gen != sessionGeneration) return@launch
+                        val activeNet = _state.value.activeDriverTrip
                         _state.update { it.copy(
                             driverCurrentPackages = current.page.items,
+                            trip = if (activeNet != null) mapBackendTripToTrip(activeNet, current.page.items) else it.trip,
                             driverCurrentPage = 0,
                             driverCurrentHasMore = current.page.currentPage + 1 < current.page.totalPages,
                             driverCurrentTotalPages = current.page.totalPages,
@@ -2932,9 +3076,11 @@ class TripViewModel : ViewModel() {
      * Moves the package from incoming transfers to current packages.
      */
     fun acceptIncomingTransfer(transferId: String, packageId: String, transferCode: String? = null) {
+        val s = _state.value
+        val tripId = s.activeDriverTrip?.id?.toString()
         viewModelScope.launch {
             _state.update { it.copy(isAcceptingTransfer = true) }
-            val success = PackageRepository.acceptPackageByTransfer(transferId, transferCode)
+            val success = PackageRepository.acceptPackageByTransfer(transferId, transferCode, tripId = tripId)
             if (success) {
                 _state.update { s2 ->
                     val matched = s2.driverIncomingTransfers.find { it.transferId == transferId }
@@ -3276,6 +3422,10 @@ class TripViewModel : ViewModel() {
     }
 
     fun openRequestTransferDialog(packageId: String, transferId: String) {
+        if (!_state.value.hasActiveTrip) {
+            viewModelScope.launch { _toastEvent.emit("No active trip — you cannot accept package offers until a trip is scheduled for you") }
+            return
+        }
         _state.update { it.copy(
             showRequestTransferDialog = true,
             requestTransferPackageId = packageId,
@@ -3292,12 +3442,18 @@ class TripViewModel : ViewModel() {
     }
 
     fun requestTransferForPackage() {
-        val transferId = _state.value.requestTransferId ?: return
-        val packageId = _state.value.requestTransferPackageId ?: return
+        val s = _state.value
+        if (!s.hasActiveTrip) {
+            viewModelScope.launch { _toastEvent.emit("No active trip — you cannot accept package offers until a trip is scheduled for you") }
+            return
+        }
+        val transferId = s.requestTransferId ?: return
+        val packageId = s.requestTransferPackageId ?: return
+        val tripId = s.activeDriverTrip?.id?.toString()
 
         viewModelScope.launch {
             _state.update { it.copy(isRequestingTransfer = true) }
-            val result = PackageRepository.requestTransfer(transferId)
+            val result = PackageRepository.requestTransfer(transferId, tripId = tripId)
             if (result != null) {
                 // Update package status in available offers to show it's pending
                 _state.update { s2 ->
@@ -3323,6 +3479,10 @@ class TripViewModel : ViewModel() {
     }
 
     fun openAcceptTransferCodeDialog(packageId: String, transferId: String, ruleType: String) {
+        if (!_state.value.hasActiveTrip) {
+            viewModelScope.launch { _toastEvent.emit("No active trip — you cannot accept package offers until a trip is scheduled for you") }
+            return
+        }
         _state.update { it.copy(
             showAcceptTransferCodeDialog = true,
             acceptTransferPackageId = packageId,
@@ -3350,9 +3510,14 @@ class TripViewModel : ViewModel() {
 
     fun acceptOfferViaTransfer() {
         val s = _state.value
+        if (!s.hasActiveTrip) {
+            viewModelScope.launch { _toastEvent.emit("No active trip — you cannot accept package offers until a trip is scheduled for you") }
+            return
+        }
         val transferId = s.acceptTransferId ?: return
         val packageId = s.acceptTransferPackageId ?: return
         val ruleType = s.acceptTransferRuleType ?: return
+        val tripId = s.activeDriverTrip?.id?.toString()
 
         viewModelScope.launch {
             _state.update { it.copy(isAcceptingTransfer = true) }
@@ -3366,7 +3531,7 @@ class TripViewModel : ViewModel() {
                 input
             } else null
 
-            val success = PackageRepository.acceptPackageByTransfer(transferId, code)
+            val success = PackageRepository.acceptPackageByTransfer(transferId, code, tripId = tripId)
             if (success) {
                 // Check if the package is in offers (New tab) or incoming transfers (Transfers tab)
                 val offerInOffers = s.driverAvailableOffers.find { it.id == packageId }

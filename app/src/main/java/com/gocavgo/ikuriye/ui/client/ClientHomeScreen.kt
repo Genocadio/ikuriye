@@ -195,9 +195,19 @@ fun ClientHomeScreen(
 
     // ── Main content composable (shared between compact and wide layouts) ─────
     val mainContent: @Composable () -> Unit = {
+        var isPullRefreshing by remember { mutableStateOf(false) }
+        LaunchedEffect(isRefreshing) {
+            if (!isRefreshing && isPullRefreshing) {
+                isPullRefreshing = false
+            }
+        }
+
         PullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = onRefresh,
+            isRefreshing = isPullRefreshing,
+            onRefresh = {
+                isPullRefreshing = true
+                onRefresh()
+            },
             modifier = Modifier.fillMaxSize().background(colors.background)
         ) {
             Box(modifier = Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {

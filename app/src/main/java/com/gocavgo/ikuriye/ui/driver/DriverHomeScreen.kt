@@ -185,35 +185,88 @@ fun DriverHomeScreen(
                         // No vehicle assigned — silent gate, show message
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(top = 48.dp, bottom = 90.dp, start = 16.dp, end = 16.dp),
+                            contentPadding = PaddingValues(top = 0.dp, bottom = 90.dp, start = 16.dp, end = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(0.dp)
                         ) {
                             item {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .statusBarsPadding()
+                                        .padding(top = 2.dp, bottom = 16.dp),
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = colors.surface,
+                                        border = BorderStroke(1.dp, colors.divider)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Filled.DirectionsCar, null, tint = colors.amber, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("No vehicle", color = colors.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                            item {
                                 Column(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = if (completedTrips.isEmpty()) 0.dp else 24.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = if (completedTrips.isEmpty()) 0.dp else 24.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Icon(Icons.Filled.DirectionsCar, null, tint = colors.amber, modifier = Modifier.size(56.dp))
                                     Spacer(Modifier.height(12.dp))
-                                    Text("No vehicle assigned", color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                    Text("No vehicle assigned", color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                                     Spacer(Modifier.height(4.dp))
                                     Text("Contact your fleet manager to assign a vehicle", color = colors.textSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
                                 }
                             }
                         }
                     } else {
-                        // Has vehicle but no active trip — show vehicle info + history
+                        // Has vehicle but no active trip — show plate pill header + vehicle info + history
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(top = 48.dp, bottom = 90.dp, start = 16.dp, end = 16.dp),
+                            contentPadding = PaddingValues(top = 0.dp, bottom = 90.dp, start = 16.dp, end = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(0.dp)
                         ) {
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .statusBarsPadding()
+                                        .padding(top = 2.dp, bottom = 12.dp),
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Surface(
+                                        onClick = onVehicleClick,
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = colors.surface,
+                                        border = BorderStroke(1.dp, colors.divider)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                vehicle.plateNumber.ifBlank { "No vehicle" },
+                                                color = colors.textPrimary,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             item {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable { onVehicleClick() }
-                                        .padding(16.dp)
                                         .background(colors.surface, RoundedCornerShape(14.dp))
                                         .border(1.dp, colors.divider, RoundedCornerShape(14.dp))
                                         .padding(16.dp),
@@ -228,9 +281,9 @@ fun DriverHomeScreen(
                                         Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(24.dp))
                                     }
                                     Spacer(Modifier.height(10.dp))
-                                    Text(vehicle.plateNumber, color = colors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text(vehicle.plateNumber, color = colors.textPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                                     Spacer(Modifier.height(2.dp))
-                                    Text(vehicle.model, color = colors.textSecondary, fontSize = 13.sp)
+                                    Text(vehicle.model, color = colors.textSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
                                     Spacer(Modifier.height(6.dp))
                                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                         vehicle.vehicleType?.let { type ->
@@ -247,7 +300,7 @@ fun DriverHomeScreen(
                                         )
                                     }
                                     Spacer(Modifier.height(8.dp))
-                                    Text("Tap to view details", color = colors.blue, fontSize = 11.sp)
+                                    Text("Tap to view details", color = colors.blue, fontSize = 11.sp, textAlign = TextAlign.Center)
                                 }
                             }
                             item {
@@ -258,9 +311,9 @@ fun DriverHomeScreen(
                                 ) {
                                     Icon(Icons.Filled.LocalShipping, null, tint = colors.textSecondary, modifier = Modifier.size(40.dp))
                                     Spacer(Modifier.height(8.dp))
-                                    Text("No active trip", color = colors.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                    Text("No active trip", color = colors.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                                     Spacer(Modifier.height(2.dp))
-                                    Text("Create a trip to start driving", color = colors.textSecondary, fontSize = 12.sp)
+                                    Text("Create a trip to start driving", color = colors.textSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
                                 }
                             }
                             if (completedTrips.isNotEmpty()) {

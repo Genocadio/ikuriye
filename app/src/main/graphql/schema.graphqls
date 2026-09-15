@@ -21,6 +21,11 @@ input AcceptTransferInput {
   Transfer code — required for SECURE transfers, optional for AUTO
   """
   transferCode: String
+
+  """
+  Optional: Driver trip ID linked to the accepted package
+  """
+  tripId: ID
 }
 
 """
@@ -61,6 +66,11 @@ input AssignDriverInput {
   Optional notes about the assignment
   """
   notes: String
+
+  """
+  Optional: Driver trip ID linked to the assigned package
+  """
+  tripId: ID
 }
 
 """

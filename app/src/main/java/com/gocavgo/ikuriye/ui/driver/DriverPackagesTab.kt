@@ -182,9 +182,19 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
         }
     }
 
+    var isPullRefreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(isRefreshing) {
+        if (!isRefreshing && isPullRefreshing) {
+            isPullRefreshing = false
+        }
+    }
+
     PullToRefreshBox(
-        isRefreshing = isRefreshing && !isSelection,
-        onRefresh = { viewModel.refreshDriverPackages() },
+        isRefreshing = isPullRefreshing && !isSelection,
+        onRefresh = {
+            isPullRefreshing = true
+            viewModel.refreshDriverPackages()
+        },
         modifier = Modifier.fillMaxSize()
     ) {
         Box(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
@@ -351,10 +361,17 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                             }
                         }
                         1 -> {
-                            if (isDriverInitLoading && filteredOffers.isEmpty()) {
+                            if (!state.driverHasVehicle) {
+                                EmptyPackagesState("Vehicle Required", "You must have an assigned vehicle to access package offers")
+                            } else if (isDriverInitLoading && filteredOffers.isEmpty()) {
                                 ShimmerList(shimmerAlpha)
                             } else if (visibleOffers.isEmpty()) {
-                                EmptyPackagesState("No available offers", "New delivery offers will appear here")
+                                Column(modifier = Modifier.fillMaxSize()) {
+                                    if (!state.hasActiveTrip) {
+                                        NoActiveTripWarningBanner()
+                                    }
+                                    EmptyPackagesState("No available offers", "New delivery offers will appear here")
+                                }
                             } else if (isWide) {
                                 LazyVerticalGrid(
                                     columns = gridCols,
@@ -363,6 +380,11 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
+                                    if (!state.hasActiveTrip) {
+                                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                                            NoActiveTripWarningBanner()
+                                        }
+                                    }
                                     items(visibleOffers, key = { it.id }) { pkg ->
                                         val acceptInfo: Pair<(() -> Unit), String>? = pkg.transferId?.let { transferId ->
                                             when (pkg.transferRuleType) {
@@ -372,7 +394,14 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                                 else -> null
                                             }
                                         }
-                                        DriverOfferCard(pkg = pkg, onAccept = acceptInfo?.first, acceptButtonLabel = acceptInfo?.second ?: "Accept Offer", onDetail = { viewModel.openPackageDetail(pkg.id) }, isNew = pkg.id == state.newPackageFromSubscription?.id)
+                                        DriverOfferCard(
+                                            pkg = pkg,
+                                            onAccept = acceptInfo?.first,
+                                            acceptButtonLabel = acceptInfo?.second ?: "Accept Offer",
+                                            onDetail = { viewModel.openPackageDetail(pkg.id) },
+                                            isNew = pkg.id == state.newPackageFromSubscription?.id,
+                                            hasActiveTrip = state.hasActiveTrip
+                                        )
                                     }
                                     if (state.driverOffersHasMore && !state.isLoadingMorePackages && !isRefreshing) {
                                         item { LaunchedEffect(Unit) { viewModel.loadMoreDriverOffers() } }
@@ -385,6 +414,11 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 90.dp),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
+                                    if (!state.hasActiveTrip) {
+                                        item {
+                                            NoActiveTripWarningBanner()
+                                        }
+                                    }
                                     items(visibleOffers, key = { it.id }) { pkg ->
                                         val acceptInfo: Pair<(() -> Unit), String>? = pkg.transferId?.let { transferId ->
                                             when (pkg.transferRuleType) {
@@ -394,7 +428,14 @@ fun DriverPackagesTab(viewModel: TripViewModel) {
                                                 else -> null
                                             }
                                         }
-                                        DriverOfferCard(pkg = pkg, onAccept = acceptInfo?.first, acceptButtonLabel = acceptInfo?.second ?: "Accept Offer", onDetail = { viewModel.openPackageDetail(pkg.id) }, isNew = pkg.id == state.newPackageFromSubscription?.id)
+                                        DriverOfferCard(
+                                            pkg = pkg,
+                                            onAccept = acceptInfo?.first,
+                                            acceptButtonLabel = acceptInfo?.second ?: "Accept Offer",
+                                            onDetail = { viewModel.openPackageDetail(pkg.id) },
+                                            isNew = pkg.id == state.newPackageFromSubscription?.id,
+                                            hasActiveTrip = state.hasActiveTrip
+                                        )
                                     }
                                     if (state.driverOffersHasMore && !state.isLoadingMorePackages && !isRefreshing) {
                                         item { LaunchedEffect(Unit) { viewModel.loadMoreDriverOffers() } }
@@ -814,12 +855,44 @@ fun DriverCurrentPackageCard(
 }
 
 @Composable
+private fun NoActiveTripWarningBanner() {
+    val colors = LocalDriversColors.current
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = colors.amber.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, colors.amber.copy(alpha = 0.4f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Filled.Warning,
+                contentDescription = null,
+                tint = colors.amber,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "No active trip — you cannot accept package offers until a trip is scheduled for you",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.textPrimary,
+                lineHeight = 16.sp
+            )
+        }
+    }
+}
+
+@Composable
 fun DriverOfferCard(
     pkg: ClientPackage,
     onAccept: (() -> Unit)?,
     acceptButtonLabel: String = "Accept Offer",
     onDetail: () -> Unit,
-    isNew: Boolean = false
+    isNew: Boolean = false,
+    hasActiveTrip: Boolean = true
 ) {
     val colors = LocalDriversColors.current
     var showMedia by remember { mutableStateOf(false) }
@@ -895,7 +968,16 @@ fun DriverOfferCard(
                     else -> Icons.Filled.AddTask
                 }
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = onAccept, modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = colors.blue)) {
+                Button(
+                    onClick = { if (hasActiveTrip) onAccept() },
+                    enabled = hasActiveTrip,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.blue,
+                        disabledContainerColor = colors.divider
+                    )
+                ) {
                     Icon(icon, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(acceptButtonLabel, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
