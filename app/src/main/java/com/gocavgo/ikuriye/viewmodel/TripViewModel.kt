@@ -2780,9 +2780,25 @@ class TripViewModel : ViewModel() {
         val isScheduled = backendTrip.status.equals("SCHEDULED", ignoreCase = true)
         if (isScheduled) return 0 // SCHEDULED: driver is still at trip origin (index 0)
 
-        // IN_PROGRESS: first waypoint that is NOT passed (or isNext)
-        val unpassedIndex = backendTrip.waypoints.indexOfFirst { !it.isPassed || it.isNext }
-        return if (unpassedIndex != -1) unpassedIndex else (backendTrip.waypoints.size - 1).coerceAtLeast(0)
+        val isDeparted = backendTrip.status.equals("IN_PROGRESS", ignoreCase = true)
+
+        // Empty waypoints: origin (index 0) passed when departed, heading to destination (index 1)
+        if (backendTrip.waypoints.isEmpty()) {
+            val idx = if (isDeparted) 1 else 0
+            Log.d(TAG, "calculateCurrentStopIndex (empty waypoints): status=${backendTrip.status}, index=$idx")
+            return idx
+        }
+
+        // Check intermediate waypoints (index 0 is origin, so intermediate starts at 1)
+        val firstUnpassed = backendTrip.waypoints.indexOfFirst { !it.isPassed || it.isNext }
+        val idx = if (firstUnpassed != -1) {
+            firstUnpassed + 1
+        } else {
+            // All intermediate waypoints passed -> destination (last index)
+            backendTrip.waypoints.size + 1
+        }
+        Log.d(TAG, "calculateCurrentStopIndex: status=${backendTrip.status}, index=$idx, waypoints=${backendTrip.waypoints.mapIndexed { i, wp -> "[$i]: ${wp.locationName} (isPassed=${wp.isPassed}, isNext=${wp.isNext}, dist=${wp.remainingDistance})" }}")
+        return idx
     }
 
     private fun ClientPackage.toTripPackage(): com.gocavgo.ikuriye.data.Package {
@@ -2797,18 +2813,47 @@ class TripViewModel : ViewModel() {
 
     /**
      * Maps a backend DriverTrip to the existing Trip model used by the UI.
-     * Correlates driver's active packages to pickups/dropoffs for each stop.
-     * When SCHEDULED: current stop is origin (index 0) with pickups only (no dropoffs).
-     * When IN_PROGRESS: current/upcoming stop is the next unpassed waypoint with correlated pickups and dropoffs.
+     * Constructs full sequence: Origin (0) -> Intermediate Waypoints (1..N) -> Destination (N+1).
+     * Origin is marked isPassed = true when trip is IN_PROGRESS (departed).
+     * Destination uses remainingDistanceToDestination / remainingTimeToDestination.
      */
     private fun mapBackendTripToTrip(
         backendTrip: BackendStorage.DriverTrip,
         driverPackages: List<ClientPackage> = _state.value.driverCurrentPackages
     ): Trip {
         val isScheduled = backendTrip.status.equals("SCHEDULED", ignoreCase = true)
+        val isDeparted = backendTrip.status.equals("IN_PROGRESS", ignoreCase = true)
+        val isCompleted = backendTrip.status.equals("COMPLETED", ignoreCase = true)
 
         val waypoints = if (backendTrip.waypoints.isNotEmpty()) {
-            backendTrip.waypoints
+            val allInterpassed = isDeparted && backendTrip.waypoints.all { it.isPassed }
+            listOfNotNull(
+                // Origin stop (Order 0)
+                backendTrip.origin?.let {
+                    BackendStorage.DriverTripWaypoint(
+                        locationName = it,
+                        latitude = backendTrip.originLatitude ?: 0.0,
+                        longitude = backendTrip.originLongitude ?: 0.0,
+                        isPassed = isDeparted || isCompleted,
+                        isNext = !isDeparted && !isCompleted,
+                        remainingDistance = if (isDeparted) 0.0 else backendTrip.remainingDistanceToDestination,
+                        remainingTime = null
+                    )
+                }
+            ) + backendTrip.waypoints + listOfNotNull(
+                // Destination stop (Order N+1)
+                backendTrip.destination?.let {
+                    BackendStorage.DriverTripWaypoint(
+                        locationName = it,
+                        latitude = backendTrip.destinationLatitude ?: 0.0,
+                        longitude = backendTrip.destinationLongitude ?: 0.0,
+                        isPassed = isCompleted,
+                        isNext = isDeparted && allInterpassed,
+                        remainingDistance = backendTrip.remainingDistanceToDestination,
+                        remainingTime = backendTrip.remainingTimeToDestination
+                    )
+                }
+            )
         } else {
             listOfNotNull(
                 backendTrip.origin?.let {
@@ -2816,9 +2861,9 @@ class TripViewModel : ViewModel() {
                         locationName = it,
                         latitude = backendTrip.originLatitude ?: 0.0,
                         longitude = backendTrip.originLongitude ?: 0.0,
-                        isPassed = false,
-                        isNext = true,
-                        remainingDistance = null,
+                        isPassed = isDeparted || isCompleted,
+                        isNext = !isDeparted && !isCompleted,
+                        remainingDistance = if (isDeparted) 0.0 else backendTrip.remainingDistanceToDestination,
                         remainingTime = null
                     )
                 },
@@ -2827,10 +2872,10 @@ class TripViewModel : ViewModel() {
                         locationName = it,
                         latitude = backendTrip.destinationLatitude ?: 0.0,
                         longitude = backendTrip.destinationLongitude ?: 0.0,
-                        isPassed = false,
-                        isNext = false,
-                        remainingDistance = null,
-                        remainingTime = null
+                        isPassed = isCompleted,
+                        isNext = isDeparted,
+                        remainingDistance = backendTrip.remainingDistanceToDestination,
+                        remainingTime = backendTrip.remainingTimeToDestination
                     )
                 }
             )

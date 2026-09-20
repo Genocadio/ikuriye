@@ -274,8 +274,8 @@ object BackendStorage {
         val vehicleLicensePlate: String?,
         val vehicleMake: String?,
         val vehicleModel: String?,
-        val remainingDistance: Double? = null,
-        val remainingTime: Double? = null
+        val remainingDistanceToDestination: Double? = null,
+        val remainingTimeToDestination: Double? = null
     )
 
     data class DriverTripsResponse(
@@ -355,31 +355,44 @@ object BackendStorage {
                 val t = tripsArray.getJSONObject(i)
                 val route = t.optJSONObject("route")
                 val vehicle = t.optJSONObject("vehicle")
-                val wpsArray = t.optJSONArray("waypoints")
+                val wpsArray = (t.optJSONArray("waypoints")?.takeIf { it.length() > 0 })
+                    ?: (t.optJSONArray("route_waypoints")?.takeIf { it.length() > 0 })
+                    ?: (route?.optJSONArray("waypoints")?.takeIf { it.length() > 0 })
+                    ?: (route?.optJSONArray("stops")?.takeIf { it.length() > 0 })
+                    ?: route?.optJSONArray("route_waypoints")
                 val waypoints = mutableListOf<DriverTripWaypoint>()
                 if (wpsArray != null) {
                     for (j in 0 until wpsArray.length()) {
                         val wp = wpsArray.getJSONObject(j)
-                        // Waypoints may be flattened (location_name/latitude/...) or
-                        // nested under a "location" object — tolerate both shapes.
                         val wpLocation = wp.optJSONObject("location")
                         val locationName = when {
                             wp.has("location_name") -> wp.optString("location_name", null)
+                            wp.has("locationName") -> wp.optString("locationName", null)
+                            wp.has("name") -> wp.optString("name", null)
                             wpLocation != null -> wpLocation.optString("custom_name", null)
                                 ?: wpLocation.optString("google_place_name", null)
+                                ?: wpLocation.optString("name", null)
                             else -> null
                         }
-                        val lat = if (wp.has("latitude")) wp.optDouble("latitude", 0.0)
-                            else wpLocation?.optDouble("latitude", 0.0) ?: 0.0
-                        val lng = if (wp.has("longitude")) wp.optDouble("longitude", 0.0)
-                            else wpLocation?.optDouble("longitude", 0.0) ?: 0.0
+                        val lat = when {
+                            wp.has("latitude") -> wp.optDouble("latitude", 0.0)
+                            wp.has("lat") -> wp.optDouble("lat", 0.0)
+                            wpLocation != null -> wpLocation.optDouble("latitude", wpLocation.optDouble("lat", 0.0))
+                            else -> 0.0
+                        }
+                        val lng = when {
+                            wp.has("longitude") -> wp.optDouble("longitude", 0.0)
+                            wp.has("lng") -> wp.optDouble("lng", 0.0)
+                            wpLocation != null -> wpLocation.optDouble("longitude", wpLocation.optDouble("lng", 0.0))
+                            else -> 0.0
+                        }
                         waypoints.add(
                             DriverTripWaypoint(
                                 locationName = locationName,
                                 latitude = lat,
                                 longitude = lng,
-                                isPassed = wp.optBoolean("is_passed", false),
-                                isNext = wp.optBoolean("is_next", false),
+                                isPassed = wp.optBoolean("is_passed", wp.optBoolean("isPassed", false)),
+                                isNext = wp.optBoolean("is_next", wp.optBoolean("isNext", false)),
                                 remainingDistance = optDoubleKeys(wp, "remaining_distance", "remainingDistance", "remaining_distance_meters", "distance", "remainingDistanceMeters", "remaining_dist"),
                                 remainingTime = optDoubleKeys(wp, "remaining_time", "remainingTime", "remaining_time_seconds", "time", "remainingTimeSeconds", "eta")
                             )
@@ -411,9 +424,11 @@ object BackendStorage {
                         vehicleLicensePlate = vehicle?.optString("licensePlate", null),
                         vehicleMake = vehicle?.optString("make", null),
                         vehicleModel = vehicle?.optString("model", null),
-                        remainingDistance = optDoubleKeys(t, "remaining_distance", "remainingDistance", "remaining_distance_meters", "distance", "remainingDistanceMeters", "remaining_dist"),
-                        remainingTime = optDoubleKeys(t, "remaining_time", "remainingTime", "remaining_time_seconds", "time", "remainingTimeSeconds", "eta")
-                    )
+                        remainingDistanceToDestination = optDoubleKeys(t, "remaining_distance_to_destination", "remainingDistanceToDestination", "remaining_distance", "remainingDistance", "distance"),
+                        remainingTimeToDestination = optDoubleKeys(t, "remaining_time_to_destination", "remainingTimeToDestination", "remaining_time", "remainingTime", "time")
+                    ).also { parsedTrip ->
+                        Log.d(TAG, "parseDriverTrips: Trip ${parsedTrip.id} (status=${parsedTrip.status}, destDist=${parsedTrip.remainingDistanceToDestination}) parsed ${waypoints.size} waypoints: ${waypoints.mapIndexed { idx, wp -> "[$idx]: ${wp.locationName} (isPassed=${wp.isPassed}, isNext=${wp.isNext}, dist=${wp.remainingDistance})" }}")
+                    }
                 )
             }
             val metricsJson = json.optJSONObject("metrics")

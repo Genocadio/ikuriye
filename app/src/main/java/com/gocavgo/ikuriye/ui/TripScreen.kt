@@ -6,6 +6,7 @@ import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
@@ -15,6 +16,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
@@ -22,10 +24,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -62,6 +67,8 @@ import com.gocavgo.ikuriye.viewmodel.DriverVehicle
 import com.gocavgo.ikuriye.viewmodel.DriverLocation
 import com.gocavgo.ikuriye.viewmodel.TripUiState
 import com.gocavgo.ikuriye.viewmodel.TripViewModel
+import android.util.Log
+import com.gocavgo.ikuriye.BuildConfig
 import com.gocavgo.ikuriye.data.Package
 import com.gocavgo.ikuriye.data.TripStop
 import com.gocavgo.ikuriye.network.BackendStorage
@@ -534,17 +541,45 @@ fun formatRemainingDistance(distanceMeters: Double?): String? {
 fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
     val state by viewModel.state.collectAsState()
     val colors = LocalDriversColors.current
-    val stop = viewModel.nextStop ?: viewModel.currentStop
-    val isNext = viewModel.nextStop != null
-    val accent = if (isNext) colors.amber else colors.blue
     val padH = adaptiveHorizontalPadding()
 
     val activeTrip = state.activeDriverTrip
-    val nextWp = activeTrip?.waypoints?.firstOrNull { it.isNext }
+    val isScheduled = activeTrip?.status.equals("SCHEDULED", ignoreCase = true)
+
+    // Select active target waypoint:
+    // Priority 1: First waypoint where isNext == true
+    // Priority 2: First waypoint where isPassed == false
+    // Fallback: Waypoint at currentStopIndex
+    val activeWp = activeTrip?.waypoints?.firstOrNull { it.isNext }
+        ?: activeTrip?.waypoints?.firstOrNull { !it.isPassed }
         ?: activeTrip?.waypoints?.getOrNull(state.currentStopIndex)
-    val distMeters = nextWp?.remainingDistance?.takeIf { it > 0.0 }
-        ?: activeTrip?.remainingDistance?.takeIf { it > 0.0 }
+
+    val activeStopIndex = if (activeWp != null && activeTrip?.waypoints != null) {
+        activeTrip.waypoints.indexOf(activeWp).coerceAtLeast(0)
+    } else {
+        state.currentStopIndex
+    }
+
+    val stop = state.trip.stops.getOrNull(activeStopIndex) ?: viewModel.currentStop
+    val isUpcoming = !isScheduled && activeStopIndex > 0
+    val accent = if (isUpcoming) colors.amber else colors.blue
+
+    val distMeters = activeWp?.remainingDistance?.takeIf { it > 0.0 }
+        ?: activeTrip?.remainingDistanceToDestination?.takeIf { it > 0.0 }
     val distanceStr = formatRemainingDistance(distMeters)
+
+    // Retain last known non-null distance value so the pill never blinks or flashes null during network re-syncs
+    var cachedDistanceStr by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(distanceStr) {
+        if (!distanceStr.isNullOrBlank()) {
+            cachedDistanceStr = distanceStr
+        }
+    }
+    val displayDistance = distanceStr ?: cachedDistanceStr
+
+    if (BuildConfig.DEBUG) {
+        Log.d("TripScreen", "UpcomingStopDashboard: stop='${stop.name}' (idx=$activeStopIndex), wpName='${activeWp?.locationName}', isPassed=${activeWp?.isPassed}, isNext=${activeWp?.isNext}, dist=$distMeters, distStr='$distanceStr'")
+    }
 
     Card(
         modifier = Modifier
@@ -556,7 +591,7 @@ fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
     ) {
         Column(modifier = Modifier.padding(if (wide) 20.dp else 16.dp)) {
 
-            // ── Stop label + name + Distance/ETA pill ──────────────────────
+            // ── Stop label + name + Distance pill ──────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -571,7 +606,7 @@ fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            if (isNext) Icons.AutoMirrored.Filled.ArrowForward else Icons.Filled.Navigation,
+                            if (isUpcoming) Icons.AutoMirrored.Filled.ArrowForward else Icons.Filled.Navigation,
                             null,
                             tint = accent,
                             modifier = Modifier.size(if (wide) 18.dp else 16.dp)
@@ -580,7 +615,7 @@ fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(
-                            if (isNext) "UPCOMING STOP" else "CURRENT STOP",
+                            if (isUpcoming) "UPCOMING STOP" else "CURRENT STOP",
                             color = accent,
                             fontSize = if (wide) 11.sp else 10.sp,
                             fontWeight = FontWeight.Bold,
@@ -594,7 +629,7 @@ fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
                         )
                     }
                 }
-                if (!distanceStr.isNullOrBlank()) {
+                if (!displayDistance.isNullOrBlank()) {
                     Spacer(Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(12.dp),
@@ -602,7 +637,9 @@ fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
                         border = BorderStroke(1.dp, accent.copy(alpha = 0.3f))
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .animateContentSize(tween(250)),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -612,12 +649,21 @@ fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(Modifier.width(5.dp))
-                            Text(
-                                distanceStr,
-                                color = accent,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            AnimatedContent(
+                                targetState = displayDistance,
+                                transitionSpec = {
+                                    (fadeIn(tween(200)) + slideInVertically(tween(200)) { it / 3 }) togetherWith
+                                            (fadeOut(tween(150)) + slideOutVertically(tween(150)) { -it / 3 })
+                                },
+                                label = "distanceAnimation"
+                            ) { targetText ->
+                                Text(
+                                    targetText,
+                                    color = accent,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -706,12 +752,52 @@ fun PackageColumn(
 
         Spacer(Modifier.height(if (wide) 10.dp else 8.dp))
 
-        if (packages.isEmpty()) {
-            Text("None", color = colors.textSecondary, fontSize = if (wide) 12.sp else 11.sp)
-        } else {
-            packages.forEach { pkg ->
-                PackagePill(pkg, color, wide = wide)
-                Spacer(Modifier.height(if (wide) 6.dp else 5.dp))
+        when {
+            packages.isEmpty() -> {
+                Text("None", color = colors.textSecondary, fontSize = if (wide) 12.sp else 11.sp)
+            }
+            packages.size == 1 -> {
+                PackagePill(packages[0], color, wide = wide)
+            }
+            else -> {
+                // Multiple packages -> Self-scrolling vertical pager with swipe gestures
+                val pagerState = rememberPagerState(pageCount = { packages.size })
+
+                // Auto-rotate package every 3.5 seconds
+                LaunchedEffect(pagerState, packages.size) {
+                    while (true) {
+                        delay(3500L)
+                        val nextPage = (pagerState.currentPage + 1) % packages.size
+                        pagerState.animateScrollToPage(nextPage)
+                    }
+                }
+
+                Column {
+                    VerticalPager(
+                        state = pagerState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(if (wide) 50.dp else 44.dp)
+                    ) { page ->
+                        val pkg = packages.getOrNull(page) ?: return@VerticalPager
+                        PackagePill(pkg, color, wide = wide)
+                    }
+
+                    // Indicator showing position in carousel (e.g. "1/3")
+                    Spacer(Modifier.height(2.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${pagerState.currentPage + 1}/${packages.size}",
+                            color = colors.textSecondary,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
         }
     }
