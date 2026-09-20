@@ -35,6 +35,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
@@ -63,6 +65,7 @@ import com.gocavgo.ikuriye.ui.PipTripView
 import com.gocavgo.ikuriye.ui.ProfileScreen
 import com.gocavgo.ikuriye.ui.RoleSelectionScreen
 import com.gocavgo.ikuriye.ui.TrackPackageScreen
+import com.gocavgo.ikuriye.ui.common.InAppUpdateBanner
 import com.gocavgo.ikuriye.ui.driver.AcceptTransferCodeDialog
 import com.gocavgo.ikuriye.ui.driver.ConfirmTransferDialog
 import com.gocavgo.ikuriye.ui.driver.CreateTripPanel
@@ -413,7 +416,18 @@ class MainActivity : ComponentActivity() {
                                 signInPrefillEmail = state.signInPrefillEmail,
                                 onClearSignInPrefill = vm::clearSignInPrefill
                             )
-                        } else if (state.driverCompanyGateLoaded && state.driverCompanyGate != DriverCompanyGate.APPROVED) {
+                        } else if (!state.driverCompanyGateLoaded) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(LocalDriversColors.current.background),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = LocalDriversColors.current.blue
+                                )
+                            }
+                        } else if (state.driverCompanyGate != DriverCompanyGate.APPROVED) {
                             BackHandler { }
                             DriverCompanyGateScreen(
                                 gate = state.driverCompanyGate,
@@ -734,6 +748,19 @@ class MainActivity : ComponentActivity() {
                         onReversedChange = vm::setDriverTripReversed,
                         onDepartureTimeChange = vm::setDriverTripDepartureTime,
                         onCreateTrip = vm::createDriverTrip
+                    )
+                }
+
+                // ── In-App Update Banner (Appears ONLY AFTER silent background download & SHA-256 verification) ──
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    InAppUpdateBanner(
+                        readyUpdate = state.readyUpdate,
+                        onInstall = { vm.installUpdate(this@MainActivity) },
+                        onDismiss = vm::dismissUpdatePrompt,
+                        modifier = Modifier.navigationBarsPadding().padding(bottom = 12.dp)
                     )
                 }
             }

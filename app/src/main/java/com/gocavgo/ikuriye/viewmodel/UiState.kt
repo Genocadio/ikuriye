@@ -7,6 +7,7 @@ import com.gocavgo.ikuriye.data.Trip
 import com.gocavgo.ikuriye.network.BackendStorage
 import com.gocavgo.ikuriye.data.dto.AuthResult
 import com.gocavgo.ikuriye.data.dto.AuthUserDto
+import com.gocavgo.ikuriye.util.AppUpdateManager
 
 // ── Domain models ─────────────────────────────────────────────────────────────
 
@@ -373,5 +374,7 @@ data class TripUiState(
     val driverCompanyCode: String? = null,
     val driverCompanyRejectionReason: String? = null,
     val isSubmittingDriverCompanyRequest: Boolean = false,
-    val driverCompanyGateError: String? = null
+    val driverCompanyGateError: String? = null,
+    // In-app update ready state (downloaded & SHA-256 verified in background)
+    val readyUpdate: AppUpdateManager.UpdateReadyState? = null
 )

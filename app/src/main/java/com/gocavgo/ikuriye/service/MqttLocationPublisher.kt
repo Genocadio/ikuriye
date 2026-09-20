@@ -4,18 +4,20 @@ import com.gocavgo.ikuriye.BuildConfig
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
+import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
-import java.util.Random
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLSocketFactory
 
 /**
  * Publishes GPS location to HiveMQ MQTT broker with:
@@ -269,7 +271,8 @@ object MqttLocationPublisher {
         reconnectFuture.get()?.cancel(false)
 
         val base = minOf(1000L * (1 shl reconnectAttempt), MAX_RECONNECT_MS)
-        val jitter = Random().nextLong(base / 4) // 0..25% jitter
+        val maxJitter = (base / 4).coerceAtLeast(1L)
+        val jitter = kotlin.random.Random.nextLong(maxJitter) // 0..25% jitter
         val delay = base + jitter
         reconnectAttempt++
 
@@ -290,46 +293,53 @@ object MqttLocationPublisher {
         synchronized(lock) {
             if (isShuttingDown || (isConnected && client?.isConnected == true)) return
 
-            try { client?.close() } catch (_: Exception) {}
+            try {
+                try { client?.close() } catch (_: Exception) {}
 
-            val clientId = "ikuriye-${userId ?: System.currentTimeMillis()}"
-            client = MqttClient(brokerUrl, clientId, MemoryPersistence())
+                val clientId = "ikuriye-${userId ?: System.currentTimeMillis()}"
+                client = MqttClient(brokerUrl, clientId, MemoryPersistence())
 
-            val options = MqttConnectOptions().apply {
-                isCleanSession = true
-                connectionTimeout = 30
-                keepAliveInterval = 60
-                isAutomaticReconnect = false // We handle reconnect ourselves
-                maxInflight = 100
-                userName = brokerUsername
-                password = brokerPassword.toCharArray()
-                mqttVersion = 4
+                val options = MqttConnectOptions().apply {
+                    isCleanSession = true
+                    connectionTimeout = 30
+                    keepAliveInterval = 60
+                    isAutomaticReconnect = false // We handle reconnect ourselves
+                    maxInflight = 100
+                    userName = brokerUsername
+                    password = brokerPassword.toCharArray()
+                    mqttVersion = 4
 
-                if (brokerUrl.startsWith("ssl://")) {
-                    socketFactory = javax.net.ssl.SSLSocketFactory.getDefault()
+                    if (brokerUrl.startsWith("ssl://")) {
+                        socketFactory = SSLSocketFactory.getDefault()
+                    }
                 }
+
+                client?.setCallback(object : MqttCallback {
+                    override fun connectionLost(cause: Throwable?) {
+                        Log.w(TAG, "Connection lost: ${cause?.message}")
+                        isConnected = false
+                        broadcastState()
+                        if (!isShuttingDown) scheduleReconnect()
+                    }
+
+                    override fun messageArrived(topic: String?, message: MqttMessage?) {}
+                    override fun deliveryComplete(token: IMqttDeliveryToken?) {}
+                })
+
+                client?.connect(options)
+                isConnected = true
+                reconnectAttempt = 0 // Reset on successful connect
+                broadcastState()
+                Log.i(TAG, "Connected to MQTT as $clientId")
+
+                // Immediately drain any queued offline points
+                executor.execute { drainOfflineQueue() }
+            } catch (e: Throwable) {
+                Log.e(TAG, "MQTT connect failed: ${e.message}")
+                isConnected = false
+                broadcastState()
+                if (!isShuttingDown) scheduleReconnect()
             }
-
-            client?.setCallback(object : org.eclipse.paho.client.mqttv3.MqttCallback {
-                override fun connectionLost(cause: Throwable?) {
-                    Log.w(TAG, "Connection lost: ${cause?.message}")
-                    isConnected = false
-                    broadcastState()
-                    if (!isShuttingDown) scheduleReconnect()
-                }
-
-                override fun messageArrived(topic: String?, message: MqttMessage?) {}
-                override fun deliveryComplete(token: org.eclipse.paho.client.mqttv3.IMqttDeliveryToken?) {}
-            })
-
-            client?.connect(options)
-            isConnected = true
-            reconnectAttempt = 0 // Reset on successful connect
-            broadcastState()
-            Log.i(TAG, "Connected to MQTT as $clientId")
-
-            // Immediately drain any queued offline points
-            executor.execute { drainOfflineQueue() }
         }
     }
 

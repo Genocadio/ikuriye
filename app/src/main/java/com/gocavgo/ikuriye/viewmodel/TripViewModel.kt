@@ -46,6 +46,8 @@ import com.gocavgo.ikuriye.network.BackendStorage
 import com.gocavgo.ikuriye.service.MqttLocationPublisher
 import com.gocavgo.ikuriye.service.MqttTripSubscriber
 import com.gocavgo.ikuriye.service.LocationKeepaliveWorker
+import com.gocavgo.ikuriye.service.PackageSyncWorker
+import com.gocavgo.ikuriye.util.AppUpdateManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -107,6 +109,12 @@ class TripViewModel : ViewModel() {
                 if (BuildConfig.DEBUG) Log.d("TripViewModel", "Session expired — forcing logout")
                 stopPackageSubscription()
                 logout()
+            }
+        }
+        // ── Listen for verified in-app update ready state ──
+        viewModelScope.launch {
+            AppUpdateManager.updateReadyState.collect { ready ->
+                _state.update { it.copy(readyUpdate = ready) }
             }
         }
     }
@@ -199,7 +207,9 @@ class TripViewModel : ViewModel() {
                             driverMetrics = cachedDriverState?.metrics,
                             driverCompletedTrips = cachedDriverState?.driverCompletedTrips ?: emptyList(),
                             hasActiveTrip = cachedDriverState?.activeTrip != null,
-                            trip = if (cachedDriverState?.activeTrip != null) mapBackendTripToTrip(cachedDriverState.activeTrip) else Trip(id = "", routeLabel = "", stops = emptyList())
+                            trip = if (cachedDriverState?.activeTrip != null) mapBackendTripToTrip(cachedDriverState.activeTrip) else Trip(id = "", routeLabel = "", stops = emptyList()),
+                            driverCompanyGate = if (cachedDriverState != null) DriverCompanyGate.APPROVED else DriverCompanyGate.UNKNOWN,
+                            driverCompanyGateLoaded = cachedDriverState != null
                         )
                     }
                     restoreNavigationState()
@@ -261,9 +271,12 @@ class TripViewModel : ViewModel() {
                         checkDriverRequestStatus()
                     }
                 }
-                // Schedule background sync worker
+                // Schedule background sync worker & check for silent in-app updates
                 AuthRepository.getAppContext()?.let { ctx ->
-                    com.gocavgo.ikuriye.service.PackageSyncWorker.schedule(ctx)
+                    PackageSyncWorker.schedule(ctx)
+                    viewModelScope.launch {
+                        AppUpdateManager.checkForUpdatesAndDownload(ctx)
+                    }
                 }
 
                 // Step 4: sync with backend — if offline, keep cached user, just notify
@@ -341,14 +354,9 @@ class TripViewModel : ViewModel() {
                     )
                 }
                 restoreNavigationState()
-                // Pre-load cached packages in background so they're ready
-                // the moment the user opens the Packages tab
-                preloadDriverPackages()
-                // Load real trips from cavgotrips (active + history)
-                loadDriverTrips()
-                // Start real-time subscription for new package transfers
-                startPackageSubscription()
-                // DRIVER users must belong to a company — lock/unlock accordingly
+                // DRIVER users must belong to an approved company — refreshDriverCompanyGate()
+                // verifies company status first and ONLY loads vehicle, trips, and packages
+                // after company approval is confirmed.
                 refreshDriverCompanyGate()
             }
             else -> {
@@ -424,6 +432,15 @@ class TripViewModel : ViewModel() {
         _state.update { it.copy(showOtpScreen = false, otpEmail = "") }
     }
 
+    fun dismissUpdatePrompt() {
+        AppUpdateManager.dismissUpdatePrompt()
+    }
+
+    fun installUpdate(context: Context) {
+        val ready = _state.value.readyUpdate ?: return
+        AppUpdateManager.installUpdate(context, ready.apkFile)
+    }
+
     fun sendPasswordResetCode(email: String) {
         viewModelScope.launch {
             val error = AuthRepository.sendPasswordResetCode(email)
@@ -484,6 +501,8 @@ class TripViewModel : ViewModel() {
                             it.copy(
                                 appRole = AppRole.DRIVER,
                                 isLoggedIn = true,
+                                driverCompanyGateLoaded = false,
+                                driverCompanyGate = DriverCompanyGate.UNKNOWN,
                                 driverProfile = DriverProfile(
                                     name = listOfNotNull(user.firstName, user.lastName)
                                         .filter { it.isNotBlank() }
@@ -1808,20 +1827,44 @@ class TripViewModel : ViewModel() {
                         driverCompanyGateError = null
                     )
                 }
-                if (gate == DriverCompanyGate.PENDING && _state.value.appRole == AppRole.DRIVER) {
-                    // Keep polling while awaiting approval so the app unlocks
-                    // automatically once a fleet manager approves the request.
-                    delay(20_000)
-                    refreshDriverCompanyGate()
+                if (gate == DriverCompanyGate.APPROVED) {
+                    // Company access is APPROVED — now load packages, vehicle, and active trips in strict sequence
+                    preloadDriverPackages()
+                    loadDriverTrips()
+                    startPackageSubscription()
+                } else {
+                    // Not approved — clear any vehicle/active trip state so screens don't show unassigned data
+                    _state.update {
+                        it.copy(
+                            hasActiveTrip = false,
+                            activeDriverTrip = null,
+                            driverHasVehicle = false,
+                            isLoadingDriverTrips = false
+                        )
+                    }
+                    if (gate == DriverCompanyGate.PENDING && _state.value.appRole == AppRole.DRIVER) {
+                        // Keep polling while awaiting approval so the app unlocks
+                        // automatically once a fleet manager approves the request.
+                        delay(20_000)
+                        refreshDriverCompanyGate()
+                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "refreshDriverCompanyGate failed: ${e.message}")
-                _state.update {
-                    it.copy(
-                        driverCompanyGate = DriverCompanyGate.UNKNOWN,
-                        driverCompanyGateLoaded = true,
-                        driverCompanyGateError = "Could not check your company status. Check your connection and try again."
-                    )
+                val currentGate = _state.value.driverCompanyGate
+                if (currentGate != DriverCompanyGate.APPROVED) {
+                    _state.update {
+                        it.copy(
+                            driverCompanyGate = DriverCompanyGate.UNKNOWN,
+                            driverCompanyGateLoaded = true,
+                            driverCompanyGateError = "Could not check your company status. Check your connection and try again."
+                        )
+                    }
+                } else {
+                    // Pre-existing approved session offline fallback
+                    _state.update { it.copy(driverCompanyGateLoaded = true) }
+                    preloadDriverPackages()
+                    loadDriverTrips()
                 }
             }
         }
@@ -2557,19 +2600,35 @@ class TripViewModel : ViewModel() {
                 val driverTripsRes = BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 10)
                 val historyTrips = BackendStorage.fetchDriverTrips(userId, "COMPLETED", limit = 20)
 
-                // Only consider active trip if driver HAS an assigned car
-                val hasCar = _state.value.driverHasVehicle
-                val activeTrip: BackendStorage.DriverTrip? = if (hasCar) {
-                    // Priority 1: IN_PROGRESS trip
-                    driverTripsRes.trips.firstOrNull { it.status.equals("IN_PROGRESS", ignoreCase = true) }
-                        // Priority 2: Closest SCHEDULED trip by departure time
-                        ?: driverTripsRes.trips.filter { it.status.equals("SCHEDULED", ignoreCase = true) }
-                            .minByOrNull { it.departureTime ?: Long.MAX_VALUE }
-                        // Fallback to first trip if any
-                        ?: driverTripsRes.trips.firstOrNull()
-                } else {
-                    // No car assigned -> driver cannot have an active trip
-                    null
+                // Candidate active trip from cavgotrips
+                val candidateTrip = driverTripsRes.trips.firstOrNull { it.status.equals("IN_PROGRESS", ignoreCase = true) }
+                    ?: driverTripsRes.trips.filter { it.status.equals("SCHEDULED", ignoreCase = true) }
+                        .minByOrNull { it.departureTime ?: Long.MAX_VALUE }
+                    ?: driverTripsRes.trips.firstOrNull()
+
+                // Driver HAS a vehicle if worker API confirmed it OR if active trip carries vehicle info
+                val tripVehiclePlate = candidateTrip?.vehicleLicensePlate?.takeIf { it.isNotBlank() }
+                val tripVehicleId = candidateTrip?.vehicleId?.takeIf { it > 0 }
+                val hasCar = _state.value.driverHasVehicle || tripVehiclePlate != null || tripVehicleId != null
+
+                val activeTrip = if (hasCar) candidateTrip else null
+
+                // Sync vehicle state if active trip provided vehicle details missing from worker profile
+                if (hasCar && candidateTrip != null) {
+                    _state.update {
+                        val cur = it.vehicle
+                        it.copy(
+                            driverHasVehicle = true,
+                            vehicle = cur.copy(
+                                id = cur.id ?: candidateTrip.vehicleId,
+                                plateNumber = cur.plateNumber.ifBlank { candidateTrip.vehicleLicensePlate ?: "" },
+                                model = cur.model.ifBlank {
+                                    listOfNotNull(candidateTrip.vehicleMake, candidateTrip.vehicleModel)
+                                        .joinToString(" ").ifBlank { "Assigned Vehicle" }
+                                }
+                            )
+                        )
+                    }
                 }
 
                 Log.d(TAG, "loadDriverTrips OK: hasCar=$hasCar, active=${activeTrip?.id ?: "none"}, history=${historyTrips.trips.size}")

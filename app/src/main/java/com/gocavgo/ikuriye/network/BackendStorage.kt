@@ -109,6 +109,19 @@ object BackendStorage {
             val response = httpClient.newCall(request).execute()
             val body = response.body?.string() ?: return@withContext null
             if (!response.isSuccessful) {
+                if (response.code == 404) {
+                    Log.i(TAG, "fetchDriverWorker: driver $driverId has no assigned vehicle worker profile (HTTP 404)")
+                    return@withContext DriverWorkerResponse(
+                        id = driverId.toString(),
+                        name = "",
+                        phone = null,
+                        email = null,
+                        licenseNumber = null,
+                        status = null,
+                        role = null,
+                        vehicle = null
+                    )
+                }
                 Log.w(TAG, "fetchDriverWorker failed: HTTP ${response.code}: $body")
                 return@withContext null
             }

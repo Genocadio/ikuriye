@@ -250,6 +250,29 @@
             echo "RELEASE_APK=$RELEASE_APK" >> "$GITHUB_ENV"
 
         # ------------------------------------------------------------
+        # 13b. Generate update metadata (update.json)
+        # ------------------------------------------------------------
+        - name: Generate update metadata
+          shell: bash
+          run: |
+            set -e
+
+            APK="${{ env.RELEASE_APK }}"
+            SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+
+            cat > update.json <<EOF
+            {
+              "versionName": "${{ env.VERSION_NAME }}",
+              "versionCode": ${{ env.VERSION_CODE }},
+              "apk": "${{ env.RELEASE_APK }}",
+              "sha256": "$SHA256"
+            }
+            EOF
+
+            echo "Generated update.json:"
+            cat update.json
+
+        # ------------------------------------------------------------
         # 14. Create GitHub Release
         # ------------------------------------------------------------
         - name: Publish GitHub Release
@@ -262,6 +285,7 @@
 
             files: |
               ${{ env.RELEASE_APK }}
+              update.json
 
             fail_on_unmatched_files: true
 

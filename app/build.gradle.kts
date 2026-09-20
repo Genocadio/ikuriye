@@ -33,7 +33,8 @@ fun secret(key: String, default: String, warn: Boolean = true): String {
     if (value == null && default.isNotEmpty() && warn) {
         logger.warn("secrets.properties / env is missing '$key' — falling back to '$default'.")
     }
-    return value ?: default
+    val raw = value ?: default
+    return if (raw.startsWith("$key=")) raw.substringAfter("$key=").trim() else raw.trim()
 }
 
 // ── Optional release signing ────────────────────────────────────────────────

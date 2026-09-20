@@ -2,6 +2,8 @@ package com.gocavgo.ikuriye.service
 
 import android.util.Log
 import com.gocavgo.ikuriye.BuildConfig
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
+import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
@@ -10,6 +12,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLSocketFactory
 
 /**
  * Subscribes to MQTT trip update channels for a specific vehicle.
@@ -83,38 +86,38 @@ object MqttTripSubscriber {
         synchronized(this) {
             if (isConnected) return
 
-            try { client?.close() } catch (_: Exception) {}
-
-            val clientId = "ikuriye-trip-${vid}-${System.currentTimeMillis() % 100000}"
-            client = MqttClient(brokerUrl, clientId, MemoryPersistence())
-
-            val options = MqttConnectOptions().apply {
-                isCleanSession = true
-                connectionTimeout = 30
-                keepAliveInterval = 60
-                isAutomaticReconnect = false
-                userName = brokerUsername
-                password = brokerPassword.toCharArray()
-                mqttVersion = 4
-                if (brokerUrl.startsWith("ssl://")) {
-                    socketFactory = javax.net.ssl.SSLSocketFactory.getDefault()
-                }
-            }
-
-            client?.setCallback(object : org.eclipse.paho.client.mqttv3.MqttCallback {
-                override fun connectionLost(cause: Throwable?) {
-                    Log.w(TAG, "Trip subscriber connection lost: ${cause?.message}")
-                    isConnected = false
-                    scheduleReconnect()
-                }
-                override fun messageArrived(topic: String?, message: MqttMessage?) {
-                    Log.d(TAG, "Trip event on $topic: ${message?.payload?.let { String(it).take(200) }}")
-                    onTripUpdate?.invoke()
-                }
-                override fun deliveryComplete(token: org.eclipse.paho.client.mqttv3.IMqttDeliveryToken?) {}
-            })
-
             try {
+                try { client?.close() } catch (_: Exception) {}
+
+                val clientId = "ikuriye-trip-${vid}-${System.currentTimeMillis() % 100000}"
+                client = MqttClient(brokerUrl, clientId, MemoryPersistence())
+
+                val options = MqttConnectOptions().apply {
+                    isCleanSession = true
+                    connectionTimeout = 30
+                    keepAliveInterval = 60
+                    isAutomaticReconnect = false
+                    userName = brokerUsername
+                    password = brokerPassword.toCharArray()
+                    mqttVersion = 4
+                    if (brokerUrl.startsWith("ssl://")) {
+                        socketFactory = SSLSocketFactory.getDefault()
+                    }
+                }
+
+                client?.setCallback(object : MqttCallback {
+                    override fun connectionLost(cause: Throwable?) {
+                        Log.w(TAG, "Trip subscriber connection lost: ${cause?.message}")
+                        isConnected = false
+                        scheduleReconnect()
+                    }
+                    override fun messageArrived(topic: String?, message: MqttMessage?) {
+                        Log.d(TAG, "Trip event on $topic: ${message?.payload?.let { String(it).take(200) }}")
+                        onTripUpdate?.invoke()
+                    }
+                    override fun deliveryComplete(token: IMqttDeliveryToken?) {}
+                })
+
                 client?.connect(options)
                 isConnected = true
                 reconnectAttempt = 0
@@ -125,7 +128,7 @@ object MqttTripSubscriber {
                 client?.subscribe(tripTopic, 1)
                 client?.subscribe(tripUpdatesTopic, 1)
                 Log.i(TAG, "Subscribed to $tripTopic, $tripUpdatesTopic")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w(TAG, "Trip subscriber connect failed: ${e.message}")
                 isConnected = false
                 scheduleReconnect()
