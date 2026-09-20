@@ -866,6 +866,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startLocationService() {
+        // Already running — nothing to do (also avoids resetting the FGS window).
+        if (LocationService.isRunning) {
+            return
+        }
+        // Never start the foreground service without location permission — on
+        // Android 14+ LocationService can't enter foreground (TYPE_LOCATION) and
+        // the system would crash the process with
+        // ForegroundServiceDidNotStartInTimeException.
+        val hasLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!hasLocation) {
+            Log.w(TAG, "Location permission missing — not starting location service")
+            return
+        }
         val serviceIntent = Intent(this, LocationService::class.java)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

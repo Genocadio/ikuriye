@@ -80,7 +80,7 @@ import com.gocavgo.ikuriye.ui.common.isLandscape
 import com.gocavgo.ikuriye.ui.common.isWideScreen
 import com.gocavgo.ikuriye.ui.common.contentMaxWidth
 import com.gocavgo.ikuriye.ui.driver.DriverHomeScreen as DriverHomeScreenImpl
-import com.gocavgo.ikuriye.ui.driver.CompletedTripsHistorySection
+import com.gocavgo.ikuriye.ui.driver.UpcomingPackagesSection
 import java.util.Locale
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -257,11 +257,16 @@ fun TripContent(
                 // ── MAIN CONTENT ──
                 UpcomingStopDashboard(viewModel, wide = wide)
 
-                // ── Completed trips history (scrollable above the dock) ──
-                if (completedTrips.isNotEmpty()) {
+                // ── Packages at the upcoming stop (replaces completed trips) ──
+                val upcomingStop = state.trip.stops.getOrNull(state.currentStopIndex)
+                if (upcomingStop != null && (upcomingStop.pickups.isNotEmpty() || upcomingStop.dropoffs.isNotEmpty())) {
                     Spacer(Modifier.height(24.dp))
                     Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-                        CompletedTripsHistorySection(trips = completedTrips)
+                        UpcomingPackagesSection(
+                            stop = upcomingStop,
+                            allPackages = state.driverCurrentPackages,
+                            onPackageClick = { viewModel.openPackageDetail(it) }
+                        )
                     }
                 }
 

@@ -9,6 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -45,6 +47,12 @@ object NexxAuth {
     // ── Proactive refresh constants (mirror the old SupaAuth.observeSession) ──
     private const val PROACTIVE_REFRESH_INTERVAL_MS = 5 * 60 * 1000L
     private const val PROACTIVE_REFRESH_THRESHOLD_SECONDS = 5 * 60L
+
+    // Serializes refresh across all callers (proactive health check, Apollo 401
+    // interceptor, upload retries). Refresh tokens are single-use and rotated, so
+    // two concurrent calls with the same token make the loser treat a rotation as
+    // a revoked session and force a logout.
+    private val refreshMutex = Mutex()
 
     // ── Endpoints ────────────────────────────────────────────────────────────
 
@@ -107,10 +115,29 @@ object NexxAuth {
 
     /**
      * Rotates the refresh token for a fresh access token. Returns true on
-     * success. A rejected refresh token (already used / revoked) clears the
-     * session and returns false.
+     * success. A genuinely revoked refresh token clears the session and returns
+     * false.
+     *
+     * Single-flight via [refreshMutex]: concurrent callers (proactive health
+     * check, Apollo 401 interceptor, upload retry) serialize so the single-use
+     * refresh token is never consumed by two requests at once. A rotation race
+     * with another client (e.g. a second app install) is only treated as a
+     * logout when the current access token is also unusable.
      */
-    suspend fun refreshSession(): Boolean {
+    suspend fun refreshSession(): Boolean = refreshMutex.withLock { doRefreshSession() }
+
+    private suspend fun doRefreshSession(): Boolean {
+        // Another caller may have refreshed while we waited — reuse the result if
+        // the access token is already comfortably fresh (never burn the new token).
+        val existing = getAccessToken()
+        val exp = getJwtExpirySeconds()
+        if (existing != null && exp != null) {
+            val remaining = exp - System.currentTimeMillis() / 1000
+            if (remaining > PROACTIVE_REFRESH_THRESHOLD_SECONDS) {
+                Log.d(TAG, "refreshSession: token already fresh (${remaining}s left) — reusing")
+                return true
+            }
+        }
         val refresh = getRefreshToken() ?: run {
             clearSessionLocally()
             return false
@@ -123,10 +150,20 @@ object NexxAuth {
             if (statusCode in 200..299) {
                 handleAuthResponse(response, "refresh") == null
             } else if (statusCode == 400 || statusCode == 401 || statusCode == 403) {
-                // Server explicitly rejected the refresh token (revoked or invalid)
-                Log.w(TAG, "refreshSession: server rejected refresh token (HTTP $statusCode) — clearing local session")
-                clearSessionLocally()
-                false
+                // Server rejected the refresh token. Only clear the session when the
+                // access token is ALSO unusable — a rotation race with another client
+                // (or a stale refresh token from a concurrent request we serialized)
+                // burns the refresh token while the access token is still valid.
+                val currentExp = getAccessToken()?.let { getJwtExpirySeconds() }
+                val accessStillUsable = currentExp != null && currentExp - System.currentTimeMillis() / 1000 > 0
+                if (accessStillUsable) {
+                    Log.w(TAG, "refreshSession: server rejected refresh token (HTTP $statusCode) but access token still valid — keeping session")
+                    false
+                } else {
+                    Log.w(TAG, "refreshSession: server rejected refresh token (HTTP $statusCode) — clearing local session")
+                    clearSessionLocally()
+                    false
+                }
             } else {
                 // Temporary server error (5xx, 429) — preserve local session
                 Log.w(TAG, "refreshSession: server returned HTTP $statusCode — preserving local session")
@@ -138,12 +175,7 @@ object NexxAuth {
             false
         } catch (e: Exception) {
             Log.e(TAG, "refreshSession: unexpected error — ${e.message}")
-            if (!com.gocavgo.ikuriye.data.AuthRepository.isNetworkAvailable()) {
-                Log.w(TAG, "refreshSession: device offline — preserving local session")
-                false
-            } else {
-                false
-            }
+            false
         }
     }
 

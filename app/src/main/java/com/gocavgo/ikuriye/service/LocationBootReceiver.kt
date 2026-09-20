@@ -1,10 +1,13 @@
 package com.gocavgo.ikuriye.service
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.gocavgo.ikuriye.data.AuthRepository
 
 /**
@@ -37,6 +40,19 @@ class LocationBootReceiver : BroadcastReceiver() {
     }
 
     private fun startLocationService(context: Context) {
+        // Already running — nothing to do (also avoids resetting the FGS window).
+        if (LocationService.isRunning) {
+            return
+        }
+        // Never start the foreground service without location permission (on
+        // Android 14+ LocationService can't enter foreground and the system would
+        // crash the process with ForegroundServiceDidNotStartInTimeException).
+        val hasLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!hasLocation) {
+            Log.w(TAG, "Location permission missing — skipping LocationService restart")
+            return
+        }
         val serviceIntent = Intent(context, LocationService::class.java)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

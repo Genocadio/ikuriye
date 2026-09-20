@@ -43,6 +43,11 @@ class LocationService : Service() {
         const val EXTRA_PICKUP_COUNT    = "extra_pickup_count"
         const val EXTRA_DROPOFF_COUNT   = "extra_dropoff_count"
 
+        // Set true while the service is alive so keepalive callers can avoid
+        // restarting something that is already running (and accidentally tripping
+        // the foreground-service start window).
+        @Volatile var isRunning = false
+
         private const val UPDATE_INTERVAL_MS   = 5_000L
         private const val FASTEST_INTERVAL_MS  = 3_000L
         private const val MIN_DISPLACEMENT_M   = 5f
@@ -91,6 +96,7 @@ class LocationService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForegroundWithType()
+        isRunning = true
 
         // Initialize MQTT publisher
         MqttLocationPublisher.init(this)
@@ -115,9 +121,13 @@ class LocationService : Service() {
             if (hasFine || hasCoarse) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
             } else {
-                Log.e(TAG, "Location permissions not granted — cannot start FGS with TYPE_LOCATION")
+                // A service started with startForegroundService() MUST call
+                // startForeground() within the system window, or Android kills the
+                // whole process (ForegroundServiceDidNotStartInTimeException).
+                // Enter foreground with the manifest-declared type, then stop.
+                Log.e(TAG, "Location permissions not granted — entering foreground with manifest type then stopping")
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST)
                 stopSelf()
-                return
             }
         } else {
             startForeground(NOTIFICATION_ID, notification)
@@ -321,6 +331,7 @@ class LocationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
         fusedLocationClient.removeLocationUpdates(locationCallback)
         if (::watchdogHandler.isInitialized) watchdogHandler.removeCallbacksAndMessages(null)
         if (::locationThread.isInitialized) locationThread.quitSafely()

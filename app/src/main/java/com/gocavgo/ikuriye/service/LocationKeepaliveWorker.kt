@@ -1,9 +1,12 @@
 package com.gocavgo.ikuriye.service
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.work.*
 import com.gocavgo.ikuriye.data.AuthRepository
 import java.util.concurrent.TimeUnit
@@ -54,6 +57,27 @@ class LocationKeepaliveWorker(
         val cachedUser = AuthRepository.getCachedUser()
         if (cachedUser == null) {
             Log.d(TAG, "No logged-in user — skipping keepalive check")
+            return Result.success()
+        }
+
+        // Already running — nothing to do (also avoids resetting the FGS window).
+        if (LocationService.isRunning) {
+            Log.d(TAG, "LocationService already running — keepalive no-op")
+            return Result.success()
+        }
+
+        // Never start the foreground service without location permission: on
+        // Android 14+ LocationService can't enter foreground with TYPE_LOCATION
+        // and skipping startForeground() crashes the process with
+        // ForegroundServiceDidNotStartInTimeException.
+        val hasLocation = ContextCompat.checkSelfPermission(
+            applicationContext, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                applicationContext, Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        if (!hasLocation) {
+            Log.w(TAG, "No location permission — skipping keepalive start")
             return Result.success()
         }
 

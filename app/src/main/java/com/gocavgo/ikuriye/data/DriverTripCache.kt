@@ -125,6 +125,7 @@ object DriverTripCache {
                 putSafeDouble(this, "longitude", wp.longitude)
                 put("isPassed", wp.isPassed)
                 put("isNext", wp.isNext)
+                wp.order?.let { put("order", it) }
                 wp.remainingDistance?.let { putSafeDouble(this, "remainingDistance", it) }
                 wp.remainingTime?.let { putSafeDouble(this, "remainingTime", it) }
             })
@@ -212,6 +213,7 @@ object DriverTripCache {
                         longitude = wp.optDouble("longitude", 0.0),
                         isPassed = wp.optBoolean("isPassed", false),
                         isNext = wp.optBoolean("isNext", false),
+                        order = if (wp.has("order") && !wp.isNull("order")) wp.optInt("order", -1).takeIf { it >= 0 } else null,
                         remainingDistance = if (wp.has("remainingDistance") && !wp.isNull("remainingDistance")) wp.optDouble("remainingDistance") else null,
                         remainingTime = if (wp.has("remainingTime") && !wp.isNull("remainingTime")) wp.optDouble("remainingTime") else null
                     )

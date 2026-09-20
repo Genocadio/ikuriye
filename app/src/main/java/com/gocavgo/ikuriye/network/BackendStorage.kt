@@ -74,6 +74,22 @@ object BackendStorage {
         val vehicle: DriverVehicleResponse?
     )
 
+    /**
+     * Result of fetching the driver's worker profile. Callers MUST distinguish
+     * "backend confirmed no vehicle (HTTP 404)" from "the backend could not be
+     * reached" — an unreachable backend must never be handled as "driver has no
+     * vehicle", otherwise the driver's car and active trip disappear during a
+     * network/server event.
+     */
+    sealed interface DriverWorkerResult {
+        /** HTTP 200 — parsed worker profile (vehicle may still be null). */
+        data class Found(val worker: DriverWorkerResponse) : DriverWorkerResult
+        /** HTTP 404 — the backend confirmed there is no worker profile / vehicle. */
+        data object NotFound : DriverWorkerResult
+        /** Auth, HTTP, or transport failure — do NOT conclude "no vehicle". */
+        data class Unreachable(val message: String) : DriverWorkerResult
+    }
+
     data class DriverVehicleResponse(
         val id: Long,
         val make: String?,
@@ -95,66 +111,59 @@ object BackendStorage {
      * { id, licensePlate, make, model, capacity, isOnline, status, vehicleType,
      *   driver: { firstName, lastName, email, phone, role, licenseNumber, ... } }
      */
-    suspend fun fetchDriverWorker(driverId: Long): DriverWorkerResponse? = withContext(Dispatchers.IO) {
+    suspend fun fetchDriverWorker(driverId: Long): DriverWorkerResult = withContext(Dispatchers.IO) {
         try {
             val accessToken = NexxAuth.getAccessToken()
             if (accessToken.isNullOrBlank()) {
                 Log.w(TAG, "fetchDriverWorker: no access token")
-                return@withContext null
+                return@withContext DriverWorkerResult.Unreachable("Not authenticated")
             }
             val url = "$restBaseUrl/main/vehicles/driver/$driverId"
             val request = Request.Builder().url(url).get()
                 .addHeader("Authorization", "Bearer $accessToken")
                 .build()
             val response = httpClient.newCall(request).execute()
-            val body = response.body?.string() ?: return@withContext null
+            if (response.code == 404) {
+                Log.i(TAG, "fetchDriverWorker: driver $driverId has no assigned vehicle worker profile (HTTP 404)")
+                return@withContext DriverWorkerResult.NotFound
+            }
+            val body = response.body?.string() ?: return@withContext DriverWorkerResult.Unreachable("Empty response")
             if (!response.isSuccessful) {
-                if (response.code == 404) {
-                    Log.i(TAG, "fetchDriverWorker: driver $driverId has no assigned vehicle worker profile (HTTP 404)")
-                    return@withContext DriverWorkerResponse(
-                        id = driverId.toString(),
-                        name = "",
-                        phone = null,
-                        email = null,
-                        licenseNumber = null,
-                        status = null,
-                        role = null,
-                        vehicle = null
-                    )
-                }
                 Log.w(TAG, "fetchDriverWorker failed: HTTP ${response.code}: $body")
-                return@withContext null
+                return@withContext DriverWorkerResult.Unreachable("HTTP ${response.code}")
             }
             val json = JSONObject(body)
             val vehicleJson = json
             val driverJson = json.optJSONObject("driver")
-            DriverWorkerResponse(
-                id = driverJson?.optString("id", null)
-                    ?: driverId.toString(),
-                name = listOfNotNull(
-                    driverJson?.optString("firstName", null),
-                    driverJson?.optString("lastName", null)
-                ).joinToString(" ").ifBlank { "" },
-                phone = driverJson?.optString("phone", null),
-                email = driverJson?.optString("email", null),
-                licenseNumber = driverJson?.optString("licenseNumber", null),
-                status = driverJson?.optString("status", null),
-                role = driverJson?.optString("role", null),
-                vehicle = DriverVehicleResponse(
-                    id = vehicleJson.optLong("id", 0),
-                    make = vehicleJson.optString("make", null),
-                    model = vehicleJson.optString("model", null),
-                    capacity = vehicleJson.optInt("capacity", 0),
-                    licensePlate = vehicleJson.optString("licensePlate", null),
-                    vehicleType = if (vehicleJson.has("vehicleType")) vehicleJson.optString("vehicleType", null) else null,
-                    status = vehicleJson.optString("status", null),
-                    isOnline = if (vehicleJson.has("isOnline")) vehicleJson.optBoolean("isOnline") else null,
-                    lastOnlineAt = vehicleJson.optString("lastOnlineAt", null)
+            DriverWorkerResult.Found(
+                DriverWorkerResponse(
+                    id = driverJson?.optString("id", null)
+                        ?: driverId.toString(),
+                    name = listOfNotNull(
+                        driverJson?.optString("firstName", null),
+                        driverJson?.optString("lastName", null)
+                    ).joinToString(" ").ifBlank { "" },
+                    phone = driverJson?.optString("phone", null),
+                    email = driverJson?.optString("email", null),
+                    licenseNumber = driverJson?.optString("licenseNumber", null),
+                    status = driverJson?.optString("status", null),
+                    role = driverJson?.optString("role", null),
+                    vehicle = DriverVehicleResponse(
+                        id = vehicleJson.optLong("id", 0),
+                        make = vehicleJson.optString("make", null),
+                        model = vehicleJson.optString("model", null),
+                        capacity = vehicleJson.optInt("capacity", 0),
+                        licensePlate = vehicleJson.optString("licensePlate", null),
+                        vehicleType = if (vehicleJson.has("vehicleType")) vehicleJson.optString("vehicleType", null) else null,
+                        status = vehicleJson.optString("status", null),
+                        isOnline = if (vehicleJson.has("isOnline")) vehicleJson.optBoolean("isOnline") else null,
+                        lastOnlineAt = vehicleJson.optString("lastOnlineAt", null)
+                    )
                 )
             )
         } catch (e: Exception) {
             Log.w(TAG, "fetchDriverWorker failed: ${e.message}")
-            null
+            DriverWorkerResult.Unreachable(e.message ?: "Network error")
         }
     }
 
@@ -210,13 +219,31 @@ object BackendStorage {
     )
 
     /**
-     * Check if the authenticated user has an existing driver request.
-     * Returns the latest request status, or null if no request exists.
+     * Result of a driver-request status check. Callers must distinguish "no
+     * request exists" from "the check failed", otherwise a transient network or
+     * auth error would be shown as "no company code" and downgrade an approved
+     * driver to the company-code entry screen.
      */
-    suspend fun getMyDriverRequestStatus(): DriverRequestStatusResponse? = withContext(Dispatchers.IO) {
+    sealed interface DriverRequestStatusResult {
+        /** HTTP 204 — the user has never submitted a driver request. */
+        data object NoRequest : DriverRequestStatusResult
+        /** HTTP 200 — the user has a request with the given status. */
+        data class Found(val status: DriverRequestStatusResponse) : DriverRequestStatusResult
+        /** Auth/network/server failure — the caller should NOT change the gate. */
+        data class Error(val message: String) : DriverRequestStatusResult
+    }
+
+    /**
+     * Check if the authenticated user has an existing driver request.
+     * Returns [DriverRequestStatusResult.NoRequest] when no request exists,
+     * [DriverRequestStatusResult.Found] with the latest request on success, or
+     * [DriverRequestStatusResult.Error] on any failure so callers can keep the
+     * current gate instead of wrongly showing the company-code entry screen.
+     */
+    suspend fun getMyDriverRequestStatus(): DriverRequestStatusResult = withContext(Dispatchers.IO) {
         try {
             val accessToken = com.gocavgo.ikuriye.nexx.NexxAuth.getAccessToken()
-            if (accessToken.isNullOrBlank()) return@withContext null
+            if (accessToken.isNullOrBlank()) return@withContext DriverRequestStatusResult.Error("Not authenticated")
             val request = Request.Builder()
                 .url("$restBaseUrl/main/driver-requests/my-status")
                 .get()
@@ -225,19 +252,28 @@ object BackendStorage {
                 .build()
             val response = httpClient.newCall(request).execute()
             val body = response.body?.string()
-            if (response.code == 204) return@withContext null  // No content = no request
-            if (!response.isSuccessful) return@withContext null
-            val json = JSONObject(body ?: return@withContext null)
-            DriverRequestStatusResponse(
-                id = json.optLong("id").takeIf { it > 0 },
-                status = json.optString("status", null),
-                companyCode = json.optString("companyCode", null),
-                companyName = json.optString("companyName", null),
-                rejectionReason = json.optString("rejectionReason", null)
-            )
+            when {
+                response.code == 204 -> DriverRequestStatusResult.NoRequest  // No content = no request
+                !response.isSuccessful -> {
+                    Log.w(TAG, "getMyDriverRequestStatus failed: HTTP ${response.code}")
+                    DriverRequestStatusResult.Error("HTTP ${response.code}")
+                }
+                else -> {
+                    val json = JSONObject(body ?: return@withContext DriverRequestStatusResult.Error("Empty response"))
+                    DriverRequestStatusResult.Found(
+                        DriverRequestStatusResponse(
+                            id = json.optLong("id").takeIf { it > 0 },
+                            status = json.optString("status", null),
+                            companyCode = json.optString("companyCode", null),
+                            companyName = json.optString("companyName", null),
+                            rejectionReason = json.optString("rejectionReason", null)
+                        )
+                    )
+                }
+            }
         } catch (e: Exception) {
             Log.w(TAG, "getMyDriverRequestStatus failed: ${e.message}")
-            null
+            DriverRequestStatusResult.Error(e.message ?: "Network error")
         }
     }
 
@@ -250,7 +286,8 @@ object BackendStorage {
         val isPassed: Boolean,
         val isNext: Boolean,
         val remainingDistance: Double?,
-        val remainingTime: Double?
+        val remainingTime: Double?,
+        val order: Int? = null
     )
 
     data class DriverTrip(
@@ -284,6 +321,19 @@ object BackendStorage {
         val metrics: DriverMetrics?
     )
 
+    /**
+     * Result of fetching driver/vehicle trips. Callers MUST distinguish a
+     * successful response (even with zero trips) from a failure to reach the
+     * trips backend — a network/server error must never be interpreted as
+     * "driver has no trips", which would wipe the active-trip UI mid-ride.
+     */
+    sealed interface DriverTripsResult {
+        /** HTTP 200 — parsed response, may legitimately contain zero trips. */
+        data class Success(val data: DriverTripsResponse) : DriverTripsResult
+        /** Auth, HTTP, or transport failure — do NOT conclude "no trips". */
+        data class Unreachable(val message: String) : DriverTripsResult
+    }
+
     data class DriverMetrics(
         val totalTrips: Long,
         val totalKilometers: Double,
@@ -296,22 +346,22 @@ object BackendStorage {
      * Fetch trips for a driver from cavgotrips via the gateway.
      * @param status Optional filter: SCHEDULED, IN_PROGRESS, COMPLETED, etc.
      */
-    suspend fun fetchDriverTrips(driverId: Long, status: String? = null, limit: Int = 50): DriverTripsResponse = withContext(Dispatchers.IO) {
+    suspend fun fetchDriverTrips(driverId: Long, status: String? = null, limit: Int = 50): DriverTripsResult = withContext(Dispatchers.IO) {
         try {
             val statusParam = if (!status.isNullOrBlank()) "&status=$status" else ""
             val url = "$restBaseUrl/navig/trips/driver/$driverId?limit=$limit&offset=0$statusParam"
             val request = Request.Builder().url(url).get().build()
             val response = httpClient.newCall(request).execute()
-            val body = response.body?.string() ?: return@withContext DriverTripsResponse(emptyList(), 0, null)
+            val body = response.body?.string() ?: return@withContext DriverTripsResult.Unreachable("Empty response")
             if (!response.isSuccessful) {
                 Log.w(TAG, "fetchDriverTrips failed: HTTP ${response.code}: $body")
-                return@withContext DriverTripsResponse(emptyList(), 0, null)
+                return@withContext DriverTripsResult.Unreachable("HTTP ${response.code}")
             }
             Log.d(TAG, "fetchDriverTrips OK: driver=$driverId status=$status")
-            parseDriverTrips(JSONObject(body))
+            DriverTripsResult.Success(parseDriverTrips(JSONObject(body)))
         } catch (e: Exception) {
             Log.w(TAG, "fetchDriverTrips failed: ${e.message}")
-            DriverTripsResponse(emptyList(), 0, null)
+            DriverTripsResult.Unreachable(e.message ?: "Network error")
         }
     }
 
@@ -322,22 +372,22 @@ object BackendStorage {
      * driver swapped onto a car mid-trip must still see that car's active trip.
      * @param status Optional filter: SCHEDULED, IN_PROGRESS, COMPLETED, etc.
      */
-    suspend fun fetchVehicleTrips(vehicleId: Long, status: String? = null, limit: Int = 50): DriverTripsResponse = withContext(Dispatchers.IO) {
+    suspend fun fetchVehicleTrips(vehicleId: Long, status: String? = null, limit: Int = 50): DriverTripsResult = withContext(Dispatchers.IO) {
         try {
             val statusParam = if (!status.isNullOrBlank()) "&status=$status" else ""
             val url = "$restBaseUrl/navig/trips/vehicle/$vehicleId?limit=$limit&offset=0$statusParam"
             val request = Request.Builder().url(url).get().build()
             val response = httpClient.newCall(request).execute()
-            val body = response.body?.string() ?: return@withContext DriverTripsResponse(emptyList(), 0, null)
+            val body = response.body?.string() ?: return@withContext DriverTripsResult.Unreachable("Empty response")
             if (!response.isSuccessful) {
                 Log.w(TAG, "fetchVehicleTrips failed: HTTP ${response.code}: $body")
-                return@withContext DriverTripsResponse(emptyList(), 0, null)
+                return@withContext DriverTripsResult.Unreachable("HTTP ${response.code}")
             }
             Log.d(TAG, "fetchVehicleTrips OK: vehicle=$vehicleId status=$status")
-            parseDriverTrips(JSONObject(body))
+            DriverTripsResult.Success(parseDriverTrips(JSONObject(body)))
         } catch (e: Exception) {
             Log.w(TAG, "fetchVehicleTrips failed: ${e.message}")
-            DriverTripsResponse(emptyList(), 0, null)
+            DriverTripsResult.Unreachable(e.message ?: "Network error")
         }
     }
 
@@ -394,11 +444,22 @@ object BackendStorage {
                                 isPassed = wp.optBoolean("is_passed", wp.optBoolean("isPassed", false)),
                                 isNext = wp.optBoolean("is_next", wp.optBoolean("isNext", false)),
                                 remainingDistance = optDoubleKeys(wp, "remaining_distance", "remainingDistance", "remaining_distance_meters", "distance", "remainingDistanceMeters", "remaining_dist"),
-                                remainingTime = optDoubleKeys(wp, "remaining_time", "remainingTime", "remaining_time_seconds", "time", "remainingTimeSeconds", "eta")
+                                remainingTime = optDoubleKeys(wp, "remaining_time", "remainingTime", "remaining_time_seconds", "time", "remainingTimeSeconds", "eta"),
+                                order = when {
+                                    wp.has("order") && !wp.isNull("order") -> wp.optInt("order", -1).takeIf { it >= 0 }
+                                    wp.has("waypoint_index") -> wp.optInt("waypoint_index", -1).takeIf { it >= 0 }
+                                    wp.has("waypointIndex") -> wp.optInt("waypointIndex", -1).takeIf { it >= 0 }
+                                    else -> null
+                                }
                             )
                         )
                     }
                 }
+                // Backend waypoints may not arrive in travel order (the DB `order`
+                // column is authoritative and mirrors the Naviga waypointIndex).
+                // Sort so the app's stop indexing matches the actual route order —
+                // otherwise "current stop" and upcoming-stop math is unstable.
+                waypoints.sortWith(compareBy(nullsLast()) { it.order })
                 // Route endpoints may be strings or nested location objects.
                 val routeOrigin = routeLocation(route, "origin")
                 val routeDestination = routeLocation(route, "destination")

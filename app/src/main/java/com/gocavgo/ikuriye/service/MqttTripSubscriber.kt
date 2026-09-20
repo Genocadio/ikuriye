@@ -8,11 +8,40 @@ import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLSocketFactory
+
+/**
+ * Live progress of one waypoint as published by Navigation on
+ * `car/{vehicleId}/trip/updates`. [waypointIndex] is the 0-based index into the
+ * trip's original waypoint list, which the backend maps to the DB `order` =
+ * index + 1 (origin excluded).
+ */
+data class MqttWaypointProgress(
+    val waypointIndex: Int,
+    val waypointName: String?,
+    val state: String?, // APPROACHING | ARRIVED | DONE
+    val remainingDistance: Double?,
+    val remainingTime: Double?
+)
+
+/**
+ * Parsed `car/{vehicleId}/trip/updates` payload (server NavigaTripDto).
+ * [waypoints] is in travel order; the last element is the destination.
+ */
+data class MqttTripUpdate(
+    val tripId: Long?,
+    val carId: String?,
+    val status: String?,
+    val waypoints: List<MqttWaypointProgress>,
+    val latitude: Double?,
+    val longitude: Double?,
+    val speed: Double?
+)
 
 /**
  * Subscribes to MQTT trip update channels for a specific vehicle.
@@ -41,7 +70,7 @@ object MqttTripSubscriber {
 
     @Volatile private var isConnected = false
     @Volatile private var currentVehicleId: String? = null
-    @Volatile private var onTripUpdate: (() -> Unit)? = null
+    @Volatile private var onTripUpdate: ((MqttTripUpdate?) -> Unit)? = null
 
     private var reconnectAttempt = 0
     private const val MAX_RECONNECT_MS = 60_000L
@@ -49,9 +78,11 @@ object MqttTripSubscriber {
     /**
      * Subscribe to trip channels for [vehicleId].
      * If already subscribed to a different vehicle, disconnects first.
-     * [callback] is invoked on the MQTT executor thread when a trip message arrives.
+     * [callback] is invoked on the MQTT executor thread when a trip message
+     * arrives, with the parsed progress payload ([MqttTripUpdate]) — or null
+     * when the payload is a plain lifecycle event with no waypoint progress.
      */
-    fun subscribe(vehicleId: String, callback: () -> Unit) {
+    fun subscribe(vehicleId: String, callback: (MqttTripUpdate?) -> Unit) {
         if (vehicleId == currentVehicleId && isConnected) {
             onTripUpdate = callback
             return
@@ -113,8 +144,8 @@ object MqttTripSubscriber {
                     }
                     override fun messageArrived(topic: String?, message: MqttMessage?) {
                         val payloadStr = message?.payload?.let { String(it, Charsets.UTF_8) } ?: "(empty)"
-                        Log.i(TAG, "🔔 [MQTT Trip Update Received] Topic: '$topic' | Payload: $payloadStr")
-                        onTripUpdate?.invoke()
+                        Log.i(TAG, "🔔 [MQTT Trip Update Received] Topic: '$topic' | Payload: ${payloadStr.take(500)}")
+                        onTripUpdate?.invoke(parseTripUpdate(payloadStr))
                     }
                     override fun deliveryComplete(token: IMqttDeliveryToken?) {}
                 })
@@ -144,5 +175,43 @@ object MqttTripSubscriber {
         val delay = base + jitter
         reconnectAttempt++
         reconnectFuture.set(executor.schedule({ connect() }, delay, TimeUnit.MILLISECONDS))
+    }
+
+    /**
+     * Parses the server NavigaTripDto JSON into [MqttTripUpdate]. Lifecycle
+     * events on `car/{vehicleId}/trip` have no waypointProgresses and produce a
+     * result with an empty [MqttTripUpdate.waypoints] list.
+     */
+    private fun parseTripUpdate(payloadStr: String): MqttTripUpdate? {
+        if (!payloadStr.startsWith("{") || payloadStr == "(empty)") return null
+        return try {
+            val json = JSONObject(payloadStr)
+            val wpArr = json.optJSONArray("waypointProgresses")
+            val waypoints = if (wpArr != null) {
+                (0 until wpArr.length()).mapNotNull { i ->
+                    val w = wpArr.optJSONObject(i) ?: return@mapNotNull null
+                    MqttWaypointProgress(
+                        waypointIndex = w.optInt("waypointIndex", -1),
+                        waypointName = w.optString("waypointName", null).takeIf { it.isNotBlank() },
+                        state = w.optString("state", null).takeIf { it.isNotBlank() },
+                        remainingDistance = if (w.has("remainingDistance") && !w.isNull("remainingDistance")) w.optDouble("remainingDistance").takeIf { !it.isNaN() } else null,
+                        remainingTime = if (w.has("remainingTime") && !w.isNull("remainingTime")) w.optDouble("remainingTime").takeIf { !it.isNaN() } else null
+                    )
+                }
+            } else emptyList()
+            val loc = json.optJSONObject("currentLocation")
+            MqttTripUpdate(
+                tripId = if (json.has("id") && !json.isNull("id")) json.optLong("id").takeIf { it > 0 } else null,
+                carId = json.optString("carId", null).takeIf { it.isNotBlank() },
+                status = json.optString("status", null).takeIf { it.isNotBlank() },
+                waypoints = waypoints,
+                latitude = loc?.let { if (it.has("latitude")) it.optDouble("latitude").takeIf { d -> !d.isNaN() } else null },
+                longitude = loc?.let { if (it.has("longitude")) it.optDouble("longitude").takeIf { d -> !d.isNaN() } else null },
+                speed = loc?.let { if (it.has("speed")) it.optDouble("speed").takeIf { d -> !d.isNaN() } else null }
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse trip update payload: ${e.message}")
+            null
+        }
     }
 }

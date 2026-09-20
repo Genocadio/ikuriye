@@ -6,13 +6,18 @@ import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -34,6 +39,20 @@ object AppUpdateManager {
 
     private const val TAG = "AppUpdateManager"
     private const val UPDATE_JSON_URL = "https://github.com/Genocadio/ikuriye/releases/latest/download/update.json"
+
+    /**
+     * Transient network failures (e.g. TLS `Connection reset`) are expected on
+     * flaky connections. We retry a couple of times before giving up for this round.
+     */
+    private const val MAX_CHECK_ATTEMPTS = 3
+    private const val RETRY_DELAY_MS = 2_000L
+
+    /**
+     * Only one silent update flow at a time. On app startup both the ViewModel
+     * init and the post-auth restore can fire [checkForUpdatesAndDownload]
+     * concurrently — serialize them so they never double-download.
+     */
+    private val checkMutex = Mutex()
 
     data class UpdateInfo(
         val versionName: String,
@@ -65,7 +84,8 @@ object AppUpdateManager {
      * Checks for updates and silently downloads/verifies the APK in the background.
      * Safe to call on app startup or periodic background sync.
      */
-    suspend fun checkForUpdatesAndDownload(context: Context) = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdatesAndDownload(context: Context) = checkMutex.withLock {
+        withContext(Dispatchers.IO) {
         try {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
             val installedVersionCode = PackageInfoCompat.getLongVersionCode(packageInfo)
@@ -75,10 +95,15 @@ object AppUpdateManager {
                 .get()
                 .build()
 
-            val response = httpClient.newCall(request).execute()
-            val body = response.body?.string() ?: return@withContext
+            val response = executeWithRetry(request, "update metadata") ?: return@withContext
+            val body = response.body?.string()
+            if (body == null) {
+                response.close()
+                return@withContext
+            }
             if (!response.isSuccessful) {
                 Log.d(TAG, "checkForUpdates: HTTP ${response.code} — no release update.json found")
+                response.close()
                 return@withContext
             }
 
@@ -146,9 +171,32 @@ object AppUpdateManager {
             Log.i(TAG, "Update v$versionName downloaded and verified successfully! Ready to install.")
             _updateReadyState.value = UpdateReadyState(updateInfo, targetApk)
 
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "checkForUpdatesAndDownload error: ${e.message}", e)
+            // Transient network failures are expected — log once at warn, no stack trace.
+            Log.w(TAG, "checkForUpdatesAndDownload skipped this round: ${e.message}")
         }
+        }
+    }
+
+    private suspend fun executeWithRetry(request: Request, tag: String): Response? {
+        var lastError: String? = null
+        repeat(MAX_CHECK_ATTEMPTS) { attempt ->
+            try {
+                val response = httpClient.newCall(request).execute()
+                if (attempt > 0) Log.d(TAG, "$tag OK on attempt ${attempt + 1}/$MAX_CHECK_ATTEMPTS")
+                return response
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e.message
+                Log.d(TAG, "$tag attempt ${attempt + 1}/$MAX_CHECK_ATTEMPTS failed: ${e.message}")
+                if (attempt < MAX_CHECK_ATTEMPTS - 1) delay(RETRY_DELAY_MS)
+            }
+        }
+        Log.w(TAG, "$tag failed after $MAX_CHECK_ATTEMPTS attempts: $lastError")
+        return null
     }
 
     /**

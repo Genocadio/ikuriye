@@ -30,6 +30,12 @@ object ApolloClientProvider {
     private var lastRefreshFailedAtMs = 0L
     private val REFRESH_COOLDOWN_MS = 30_000L
 
+    // Set whenever a refresh attempt completes. Used to break the retry hot-loop:
+    // if a business-level auth error (e.g. GraphQL "Unauthorized" with a still-valid
+    // token) comes back right after a refresh, retrying again would spin forever.
+    @Volatile
+    private var lastRefreshCompletedAtMs = 0L
+
     @Volatile
     private var internalClient: ApolloClient? = null
     private val clientLock = Any()
@@ -137,12 +143,21 @@ object ApolloClientProvider {
                             // Step 1: check if another request already refreshed while we waited
                             val liveToken = NexxAuth.getAccessToken()
                             if (liveToken != null) {
-                                Log.d(TAG, "Token already fresh — another request refreshed while we waited, retrying")
-                                return chain.proceed(
-                                    request.newBuilder()
-                                        .addHeader("Authorization", "Bearer $liveToken")
-                                        .build()
-                                )
+                                // Only retry once per refresh window. Without this guard an
+                                // auth failure that persists with a valid token (e.g. a
+                                // GraphQL business-level "Unauthorized") would re-enter this
+                                // interceptor forever, hammering the backend every ~2s.
+                                val justRefreshed = System.currentTimeMillis() - lastRefreshCompletedAtMs < REFRESH_COOLDOWN_MS
+                                if (!justRefreshed) {
+                                    Log.d(TAG, "Token already fresh — another request refreshed while we waited, retrying")
+                                    return chain.proceed(
+                                        request.newBuilder()
+                                            .addHeader("Authorization", "Bearer $liveToken")
+                                            .build()
+                                    )
+                                }
+                                Log.w(TAG, "Auth error persisted right after a refresh — returning original failure")
+                                return@withLock response
                             }
 
                             // Step 2: cooldown — don't hammer the refresh endpoint if it just failed
@@ -161,6 +176,7 @@ object ApolloClientProvider {
                                 Log.d(TAG, "$ctx — attempting silent token refresh (mutex acquired)")
                             }
                             val refreshed = NexxAuth.refreshSession()
+                            lastRefreshCompletedAtMs = System.currentTimeMillis()
                             if (refreshed) {
                                 val newToken = NexxAuth.getAccessToken()
                                 if (newToken != null) {
