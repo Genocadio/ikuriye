@@ -273,7 +273,9 @@ object BackendStorage {
         val vehicleId: Long? = null,
         val vehicleLicensePlate: String?,
         val vehicleMake: String?,
-        val vehicleModel: String?
+        val vehicleModel: String?,
+        val remainingDistance: Double? = null,
+        val remainingTime: Double? = null
     )
 
     data class DriverTripsResponse(
@@ -378,8 +380,8 @@ object BackendStorage {
                                 longitude = lng,
                                 isPassed = wp.optBoolean("is_passed", false),
                                 isNext = wp.optBoolean("is_next", false),
-                                remainingDistance = if (wp.has("remaining_distance")) wp.optDouble("remaining_distance") else null,
-                                remainingTime = if (wp.has("remaining_time")) wp.optDouble("remaining_time") else null
+                                remainingDistance = optDoubleKeys(wp, "remaining_distance", "remainingDistance", "remaining_distance_meters", "distance", "remainingDistanceMeters", "remaining_dist"),
+                                remainingTime = optDoubleKeys(wp, "remaining_time", "remainingTime", "remaining_time_seconds", "time", "remainingTimeSeconds", "eta")
                             )
                         )
                     }
@@ -408,7 +410,9 @@ object BackendStorage {
                         vehicleId = if (vehicle != null && vehicle.has("id")) vehicle.optLong("id", 0).takeIf { it > 0 } else null,
                         vehicleLicensePlate = vehicle?.optString("licensePlate", null),
                         vehicleMake = vehicle?.optString("make", null),
-                        vehicleModel = vehicle?.optString("model", null)
+                        vehicleModel = vehicle?.optString("model", null),
+                        remainingDistance = optDoubleKeys(t, "remaining_distance", "remainingDistance", "remaining_distance_meters", "distance", "remainingDistanceMeters", "remaining_dist"),
+                        remainingTime = optDoubleKeys(t, "remaining_time", "remainingTime", "remaining_time_seconds", "time", "remainingTimeSeconds", "eta")
                     )
                 )
             }
@@ -425,6 +429,17 @@ object BackendStorage {
             Log.w(TAG, "parseDriverTrips failed: ${e.message}")
             return DriverTripsResponse(emptyList(), 0, null)
         }
+    }
+
+    private fun optDoubleKeys(json: JSONObject?, vararg keys: String): Double? {
+        if (json == null) return null
+        for (k in keys) {
+            if (json.has(k) && !json.isNull(k)) {
+                val v = json.optDouble(k, -1.0)
+                if (!v.isNaN() && v >= 0.0) return v
+            }
+        }
+        return null
     }
 
     // ── Route search + trip creation (cavgotrips via gateway /navig) ─────

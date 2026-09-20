@@ -112,7 +112,8 @@ object MqttTripSubscriber {
                         scheduleReconnect()
                     }
                     override fun messageArrived(topic: String?, message: MqttMessage?) {
-                        Log.d(TAG, "Trip event on $topic: ${message?.payload?.let { String(it).take(200) }}")
+                        val payloadStr = message?.payload?.let { String(it, Charsets.UTF_8) } ?: "(empty)"
+                        Log.i(TAG, "🔔 [MQTT Trip Update Received] Topic: '$topic' | Payload: $payloadStr")
                         onTripUpdate?.invoke()
                     }
                     override fun deliveryComplete(token: IMqttDeliveryToken?) {}

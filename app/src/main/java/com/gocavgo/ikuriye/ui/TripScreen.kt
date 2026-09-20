@@ -1,6 +1,7 @@
 package com.gocavgo.ikuriye.ui
 
 import android.annotation.SuppressLint
+import android.location.Location
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -62,14 +63,18 @@ import com.gocavgo.ikuriye.viewmodel.DriverLocation
 import com.gocavgo.ikuriye.viewmodel.TripUiState
 import com.gocavgo.ikuriye.viewmodel.TripViewModel
 import com.gocavgo.ikuriye.data.Package
+import com.gocavgo.ikuriye.data.TripStop
+import com.gocavgo.ikuriye.network.BackendStorage
 import com.gocavgo.ikuriye.ui.common.ProfileQuickMenu
 import com.gocavgo.ikuriye.ui.common.SettingsMenu
+import com.gocavgo.ikuriye.ui.common.VehiclePlatePill
 import com.gocavgo.ikuriye.ui.common.adaptiveHorizontalPadding
 import com.gocavgo.ikuriye.ui.common.isLandscape
 import com.gocavgo.ikuriye.ui.common.isWideScreen
 import com.gocavgo.ikuriye.ui.common.contentMaxWidth
 import com.gocavgo.ikuriye.ui.driver.DriverHomeScreen as DriverHomeScreenImpl
 import com.gocavgo.ikuriye.ui.driver.CompletedTripsHistorySection
+import java.util.Locale
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN TRIP SCREEN
@@ -243,27 +248,7 @@ fun TripContent(
                 Spacer(Modifier.height(12.dp))
 
                 // ── MAIN CONTENT ──
-                if (wide) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1.6f)) {
-                            UpcomingStopDashboard(viewModel, wide = true)
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            RouteProgressStrip(state)
-                            Spacer(Modifier.height(12.dp))
-                            TripActionButton(state, viewModel)
-                        }
-                    }
-                } else {
-                    UpcomingStopDashboard(viewModel, wide = false)
-                    Spacer(Modifier.height(12.dp))
-                    RouteProgressStrip(state)
-                    Spacer(Modifier.height(16.dp))
-                    TripActionButton(state, viewModel)
-                }
+                UpcomingStopDashboard(viewModel, wide = wide)
 
                 // ── Completed trips history (scrollable above the dock) ──
                 if (completedTrips.isNotEmpty()) {
@@ -330,26 +315,12 @@ fun TripTopBar(
                     fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }
             // Vehicle plate pill
-            Surface(
+            VehiclePlatePill(
+                plateNumber = vehiclePlate,
+                speedKmh = state.driverLocation.speedKmh,
                 onClick = onVehicleClick,
-                shape = RoundedCornerShape(14.dp),
-                color = colors.surface,
-                border = BorderStroke(1.dp, colors.divider)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        vehiclePlate.ifBlank { "No vehicle" },
-                        color = colors.textPrimary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
+                isLandscape = true
+            )
         }
     } else {
         // ── Vertical layout for portrait phones / tablets (no background bar) ──
@@ -366,26 +337,12 @@ fun TripTopBar(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
             ) {
-                Surface(
+                VehiclePlatePill(
+                    plateNumber = vehiclePlate,
+                    speedKmh = state.driverLocation.speedKmh,
                     onClick = onVehicleClick,
-                    shape = RoundedCornerShape(18.dp),
-                    color = colors.surface,
-                    border = BorderStroke(1.dp, colors.divider)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            vehiclePlate.ifBlank { "No vehicle" },
-                            color = colors.textPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
+                    isLandscape = false
+                )
             }
 
             // Inline vehicle info from trip — type + remaining seats
@@ -565,14 +522,29 @@ fun LocationBar(loc: DriverLocation) {
     }
 }
 
+fun formatRemainingDistance(distanceMeters: Double?): String? {
+    return distanceMeters?.takeIf { it > 0.0 }?.let { dist ->
+        if (dist < 1000) "${dist.toInt()} m"
+        else "${String.format(Locale.US, "%.1f", dist / 1000.0)} km"
+    }
+}
+
 // ── UPCOMING STOP DASHBOARD ───────────────────────────────────────────────────
 @Composable
 fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
+    val state by viewModel.state.collectAsState()
     val colors = LocalDriversColors.current
     val stop = viewModel.nextStop ?: viewModel.currentStop
     val isNext = viewModel.nextStop != null
     val accent = if (isNext) colors.amber else colors.blue
     val padH = adaptiveHorizontalPadding()
+
+    val activeTrip = state.activeDriverTrip
+    val nextWp = activeTrip?.waypoints?.firstOrNull { it.isNext }
+        ?: activeTrip?.waypoints?.getOrNull(state.currentStopIndex)
+    val distMeters = nextWp?.remainingDistance?.takeIf { it > 0.0 }
+        ?: activeTrip?.remainingDistance?.takeIf { it > 0.0 }
+    val distanceStr = formatRemainingDistance(distMeters)
 
     Card(
         modifier = Modifier
@@ -584,37 +556,70 @@ fun UpcomingStopDashboard(viewModel: TripViewModel, wide: Boolean = false) {
     ) {
         Column(modifier = Modifier.padding(if (wide) 20.dp else 16.dp)) {
 
-            // ── Stop label + name ─────────────────────────────────────────
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(if (wide) 36.dp else 32.dp)
-                        .clip(CircleShape)
-                        .background(accent.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        if (isNext) Icons.AutoMirrored.Filled.ArrowForward else Icons.Filled.Navigation,
-                        null,
-                        tint = accent,
-                        modifier = Modifier.size(if (wide) 18.dp else 16.dp)
-                    )
+            // ── Stop label + name + Distance/ETA pill ──────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .size(if (wide) 36.dp else 32.dp)
+                            .clip(CircleShape)
+                            .background(accent.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (isNext) Icons.AutoMirrored.Filled.ArrowForward else Icons.Filled.Navigation,
+                            null,
+                            tint = accent,
+                            modifier = Modifier.size(if (wide) 18.dp else 16.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            if (isNext) "UPCOMING STOP" else "CURRENT STOP",
+                            color = accent,
+                            fontSize = if (wide) 11.sp else 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            stop.name,
+                            color = colors.textPrimary,
+                            fontSize = if (wide) 22.sp else 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(
-                        if (isNext) "UPCOMING STOP" else "CURRENT STOP",
-                        color = accent,
-                        fontSize = if (wide) 11.sp else 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        stop.name,
-                        color = colors.textPrimary,
-                        fontSize = if (wide) 22.sp else 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                if (!distanceStr.isNullOrBlank()) {
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = accent.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, accent.copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Filled.NearMe,
+                                contentDescription = null,
+                                tint = accent,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                distanceStr,
+                                color = accent,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
 
@@ -926,8 +931,9 @@ fun TripActionButton(state: TripUiState, viewModel: TripViewModel) {
                             Text("Trip In Progress", color = colors.blue, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                             val nextWp = activeTrip?.waypoints?.firstOrNull { it.isNext }
                             if (nextWp != null) {
+                                val distStr = formatRemainingDistance(nextWp.remainingDistance)
                                 Text(
-                                    "Next: ${nextWp.locationName ?: "Stop"}",
+                                    "Next: ${nextWp.locationName ?: "Stop"}" + (if (distStr != null) " • $distStr" else ""),
                                     color = colors.textSecondary, fontSize = 11.sp
                                 )
                             }
@@ -983,10 +989,16 @@ fun TripCompletedScreen() {
 
 @Composable
 fun PipTripView(viewModel: TripViewModel) {
+    val state  by viewModel.state.collectAsState()
     val colors = LocalDriversColors.current
     val stop   = viewModel.nextStop ?: viewModel.currentStop
     val isNext = viewModel.nextStop != null
     val color  = if (isNext) colors.amber else colors.blue
+
+    val activeTrip = state.activeDriverTrip
+    val nextWp = activeTrip?.waypoints?.firstOrNull { it.isNext }
+        ?: activeTrip?.waypoints?.getOrNull(state.currentStopIndex)
+    val distStr = formatRemainingDistance(nextWp?.remainingDistance)
 
     // Guard: if stop name is blank, the trip data hasn't loaded yet
     val hasTripData = stop.name.isNotBlank()
@@ -1041,8 +1053,12 @@ fun PipTripView(viewModel: TripViewModel) {
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(stop.address, color = colors.textSecondary, fontSize = 8.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (!distStr.isNullOrBlank()) {
+                        Text(distStr, color = color, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text(stop.address, color = colors.textSecondary, fontSize = 8.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
 
                 Spacer(Modifier.height(6.dp))

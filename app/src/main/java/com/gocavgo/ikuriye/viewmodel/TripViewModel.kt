@@ -117,6 +117,12 @@ class TripViewModel : ViewModel() {
                 _state.update { it.copy(readyUpdate = ready) }
             }
         }
+        // ── Silently check for in-app updates in background on app startup for all users ──
+        AuthRepository.getAppContext()?.let { ctx ->
+            viewModelScope.launch {
+                AppUpdateManager.checkForUpdatesAndDownload(ctx)
+            }
+        }
     }
 
     val stops get() = _state.value.trip.stops
@@ -182,6 +188,7 @@ class TripViewModel : ViewModel() {
                     if (cachedVid != null && cachedVid > 0L) {
                         MqttLocationPublisher.vehicleId = cachedVid.toString()
                         MqttTripSubscriber.subscribe(cachedVid.toString()) {
+                            Log.i(TAG, "🔔 [MQTT Trip Event] Triggering loadDriverTrips() for vehicle $cachedVid")
                             viewModelScope.launch { loadDriverTrips() }
                         }
                     }
@@ -2600,35 +2607,19 @@ class TripViewModel : ViewModel() {
                 val driverTripsRes = BackendStorage.fetchDriverTrips(userId, "SCHEDULED,IN_PROGRESS", limit = 10)
                 val historyTrips = BackendStorage.fetchDriverTrips(userId, "COMPLETED", limit = 20)
 
-                // Candidate active trip from cavgotrips
-                val candidateTrip = driverTripsRes.trips.firstOrNull { it.status.equals("IN_PROGRESS", ignoreCase = true) }
-                    ?: driverTripsRes.trips.filter { it.status.equals("SCHEDULED", ignoreCase = true) }
-                        .minByOrNull { it.departureTime ?: Long.MAX_VALUE }
-                    ?: driverTripsRes.trips.firstOrNull()
-
-                // Driver HAS a vehicle if worker API confirmed it OR if active trip carries vehicle info
-                val tripVehiclePlate = candidateTrip?.vehicleLicensePlate?.takeIf { it.isNotBlank() }
-                val tripVehicleId = candidateTrip?.vehicleId?.takeIf { it > 0 }
-                val hasCar = _state.value.driverHasVehicle || tripVehiclePlate != null || tripVehicleId != null
-
-                val activeTrip = if (hasCar) candidateTrip else null
-
-                // Sync vehicle state if active trip provided vehicle details missing from worker profile
-                if (hasCar && candidateTrip != null) {
-                    _state.update {
-                        val cur = it.vehicle
-                        it.copy(
-                            driverHasVehicle = true,
-                            vehicle = cur.copy(
-                                id = cur.id ?: candidateTrip.vehicleId,
-                                plateNumber = cur.plateNumber.ifBlank { candidateTrip.vehicleLicensePlate ?: "" },
-                                model = cur.model.ifBlank {
-                                    listOfNotNull(candidateTrip.vehicleMake, candidateTrip.vehicleModel)
-                                        .joinToString(" ").ifBlank { "Assigned Vehicle" }
-                                }
-                            )
-                        )
-                    }
+                // Only consider active trip if driver HAS an assigned car
+                val hasCar = _state.value.driverHasVehicle
+                val activeTrip: BackendStorage.DriverTrip? = if (hasCar) {
+                    // Priority 1: IN_PROGRESS trip
+                    driverTripsRes.trips.firstOrNull { it.status.equals("IN_PROGRESS", ignoreCase = true) }
+                        // Priority 2: Closest SCHEDULED trip by departure time
+                        ?: driverTripsRes.trips.filter { it.status.equals("SCHEDULED", ignoreCase = true) }
+                            .minByOrNull { it.departureTime ?: Long.MAX_VALUE }
+                        // Fallback to first trip if any
+                        ?: driverTripsRes.trips.firstOrNull()
+                } else {
+                    // No car assigned -> driver cannot have an active trip
+                    null
                 }
 
                 Log.d(TAG, "loadDriverTrips OK: hasCar=$hasCar, active=${activeTrip?.id ?: "none"}, history=${historyTrips.trips.size}")
@@ -2684,6 +2675,7 @@ class TripViewModel : ViewModel() {
                     val vidStr = vId.toString()
                     MqttLocationPublisher.vehicleId = vidStr
                     MqttTripSubscriber.subscribe(vidStr) {
+                        Log.i(TAG, "🔔 [MQTT Trip Event] Triggering loadDriverTrips() for vehicle $vidStr")
                         viewModelScope.launch { loadDriverTrips() }
                     }
                 }
@@ -2767,6 +2759,7 @@ class TripViewModel : ViewModel() {
             MqttLocationPublisher.vehicleId = assignedVid
             if (assignedVid != null) {
                 MqttTripSubscriber.subscribe(assignedVid) {
+                    Log.i(TAG, "🔔 [MQTT Trip Event] Triggering loadDriverTrips() for vehicle $assignedVid")
                     viewModelScope.launch { loadDriverTrips() }
                 }
             } else {
@@ -2879,7 +2872,18 @@ class TripViewModel : ViewModel() {
      * Call this from pull-to-refresh or after status changes.
      */
     fun refreshDriverTrips() {
-        loadDriverTrips()
+        if (!AuthRepository.isNetworkAvailable()) {
+            viewModelScope.launch { _toastEvent.emit("No internet connection — showing cached data") }
+            return
+        }
+        _state.update { it.copy(isRefreshingDriverTrips = true) }
+        viewModelScope.launch {
+            try {
+                loadDriverTrips()
+            } finally {
+                _state.update { it.copy(isRefreshingDriverTrips = false) }
+            }
+        }
     }
 
     fun loadDriverPackages() {

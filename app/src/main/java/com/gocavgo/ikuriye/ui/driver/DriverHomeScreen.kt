@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.PathEffect
 import com.gocavgo.ikuriye.ui.common.CachedAvatarImage
 import com.gocavgo.ikuriye.ui.common.ProfileQuickMenu
 import com.gocavgo.ikuriye.ui.common.SettingsMenu
+import com.gocavgo.ikuriye.ui.common.VehiclePlatePill
 import com.gocavgo.ikuriye.ui.common.adaptiveHorizontalPadding
 import com.gocavgo.ikuriye.ui.common.contentMaxWidth
 import com.gocavgo.ikuriye.ui.common.isWideScreen
@@ -110,13 +111,6 @@ fun DriverHomeScreen(
     val maxW   = contentMaxWidth()
     var hasAppeared by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
-    var isRefreshingTrips by remember { mutableStateOf(false) }
-    // Reset pull-to-refresh indicator when trip loading completes
-    LaunchedEffect(state.isLoadingDriverTrips) {
-        if (!state.isLoadingDriverTrips && isRefreshingTrips) {
-            isRefreshingTrips = false
-        }
-    }
     val pagerState = rememberPagerState(pageCount = { 2 })
     // Sync pager → driverHomeTab (for bottom bar)
     LaunchedEffect(pagerState.currentPage) {
@@ -142,11 +136,8 @@ fun DriverHomeScreen(
             when (tab) {
                 0 -> {
                     androidx.compose.material3.pulltorefresh.PullToRefreshBox(
-                        isRefreshing = isRefreshingTrips,
-                        onRefresh = {
-                            isRefreshingTrips = true
-                            viewModel.refreshDriverTrips()
-                        }
+                        isRefreshing = state.isRefreshingDriverTrips,
+                        onRefresh = { viewModel.refreshDriverTrips() }
                     ) {
                     if (state.hasActiveTrip) {
                         Box(modifier = Modifier.fillMaxSize()) {
@@ -240,26 +231,11 @@ fun DriverHomeScreen(
                                         .padding(top = 2.dp, bottom = 12.dp),
                                     horizontalArrangement = Arrangement.Center
                                 ) {
-                                    Surface(
-                                        onClick = onVehicleClick,
-                                        shape = RoundedCornerShape(18.dp),
-                                        color = colors.surface,
-                                        border = BorderStroke(1.dp, colors.divider)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(18.dp))
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                vehicle.plateNumber.ifBlank { "No vehicle" },
-                                                color = colors.textPrimary,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
+                                    VehiclePlatePill(
+                                        plateNumber = vehicle.plateNumber,
+                                        speedKmh = state.driverLocation.speedKmh,
+                                        onClick = onVehicleClick
+                                    )
                                 }
                             }
                             item {

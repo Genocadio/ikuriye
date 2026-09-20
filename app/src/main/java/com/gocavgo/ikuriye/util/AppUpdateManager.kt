@@ -54,7 +54,8 @@ object AppUpdateManager {
     private val httpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(300, TimeUnit.SECONDS)
+            .writeTimeout(300, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
@@ -127,7 +128,7 @@ object AppUpdateManager {
 
             responseBody.byteStream().use { input ->
                 FileOutputStream(tempApk).use { output ->
-                    input.copyTo(output)
+                    input.copyTo(output, bufferSize = 32768)
                 }
             }
 
@@ -146,7 +147,7 @@ object AppUpdateManager {
             _updateReadyState.value = UpdateReadyState(updateInfo, targetApk)
 
         } catch (e: Exception) {
-            Log.w(TAG, "checkForUpdatesAndDownload: ${e.message}")
+            Log.e(TAG, "checkForUpdatesAndDownload error: ${e.message}", e)
         }
     }
 
