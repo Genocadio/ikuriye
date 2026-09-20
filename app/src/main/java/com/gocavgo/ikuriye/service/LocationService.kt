@@ -157,6 +157,11 @@ class LocationService : Service() {
                 val accuracy = location.accuracy
                 val speed = location.speed * 3.6f // m/s → km/h
 
+                // Filter invalid/zero coordinates and extreme inaccuracies
+                if (lat == 0.0 && lng == 0.0) return
+                if (lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0) return
+                if (accuracy < 0f || accuracy > 200f) return
+
                 Log.d(TAG, "📍 LAT=$lat | LNG=$lng | ACC=${accuracy}m | SPD=${String.format(java.util.Locale.US, "%.1f", speed)} km/h | Priority=$currentPriority")
 
                 // Publish GPS to MQTT broker

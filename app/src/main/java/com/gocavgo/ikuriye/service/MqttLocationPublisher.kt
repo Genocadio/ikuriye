@@ -12,6 +12,7 @@ import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -127,6 +128,11 @@ object MqttLocationPublisher {
 
     fun publishLocation(lat: Double, lng: Double, speed: Float, bearing: Float?, accuracy: Float?) {
         if (userId.isNullOrBlank()) return
+
+        // Reject invalid/unfixed coordinates and extreme accuracies
+        if (lat == 0.0 && lng == 0.0) return
+        if (lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0) return
+        if (accuracy != null && (accuracy < 0f || accuracy > 200f)) return
 
         val point = GpsPointQueue.GpsPoint(
             id = 0, lat = lat, lng = lng, speed = speed,
@@ -398,6 +404,9 @@ object MqttLocationPublisher {
         return buf.toByteArray()
     }
 
-    private fun doubleToBytes(value: Double): ByteArray = ByteBuffer.allocate(8).putDouble(value).array()
-    private fun floatToBytes(value: Float): ByteArray = ByteBuffer.allocate(4).putFloat(value).array()
+    private fun doubleToBytes(value: Double): ByteArray =
+        ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(value).array()
+
+    private fun floatToBytes(value: Float): ByteArray =
+        ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putFloat(value).array()
 }
