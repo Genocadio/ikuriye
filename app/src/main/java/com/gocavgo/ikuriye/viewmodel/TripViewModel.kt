@@ -68,6 +68,12 @@ class TripViewModel : ViewModel() {
 
     private companion object {
         private const val TAG = "TripViewModel"
+
+        // DONE/ARRIVED waypoints are only trusted when the live GPS sample is within
+        // this distance of the waypoint. A bogus far-away coordinate (e.g. emulator
+        // default GPS on another continent) must never mark a stop as passed — this is
+        // the client-side "no-miss" guard against skips like trip 25's Kwa Lando.
+        private const val MAX_WAYPOINT_REACH_KM = 5.0
     }
 
     private val _state = MutableStateFlow(TripUiState())
@@ -1860,6 +1866,59 @@ class TripViewModel : ViewModel() {
         driverCompanyGatePoll?.cancel()
         driverCompanyGatePoll = viewModelScope.launch {
             try {
+                // Single profile entry point: POST /main/users/sync resolves the
+                // user's company. A driver who already belongs to a company is
+                // approved — no company-code entry. Only drivers without a company
+                // fall through to the driver-request check (PENDING/REJECTED/no
+                // request), and an old request may still be pending even when the
+                // sync reports no company.
+                val sync = BackendStorage.getUserSync()
+                if (sync?.hasCompany == true) {
+                    _state.update {
+                        it.copy(
+                            driverCompanyGate = DriverCompanyGate.APPROVED,
+                            driverCompanyGateLoaded = true,
+                            driverCompanyName = sync.companyName,
+                            driverCompanyCode = sync.companyCode,
+                            driverCompanyRejectionReason = null,
+                            driverCompanyGateError = null
+                        )
+                    }
+                    // Company access is APPROVED — now load packages, vehicle, and active trips in strict sequence
+                    preloadDriverPackages()
+                    loadDriverTrips()
+                    startPackageSubscription()
+                } else {
+                    // No company (or sync unavailable) — fall back to the legacy
+                    // driver-request check so existing requests are still honored.
+                    checkDriverRequestForGate()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshDriverCompanyGate failed: ${e.message}")
+                val currentGate = _state.value.driverCompanyGate
+                if (currentGate != DriverCompanyGate.APPROVED) {
+                    _state.update {
+                        it.copy(
+                            driverCompanyGate = DriverCompanyGate.UNKNOWN,
+                            driverCompanyGateLoaded = true,
+                            driverCompanyGateError = "Could not check your company status. Check your connection and try again."
+                        )
+                    }
+                } else {
+                    // Pre-existing approved session offline fallback
+                    _state.update { it.copy(driverCompanyGateLoaded = true) }
+                    preloadDriverPackages()
+                    loadDriverTrips()
+                }
+                delay(10_000)
+                driverCompanyGatePoll = viewModelScope.launch { refreshDriverCompanyGate() }
+            }
+        }
+    }
+
+    private fun checkDriverRequestForGate() {
+        driverCompanyGatePoll = viewModelScope.launch {
+            try {
                 when (val result = BackendStorage.getMyDriverRequestStatus()) {
                     is BackendStorage.DriverRequestStatusResult.Found -> {
                         val status = result.status.status
@@ -1880,12 +1939,10 @@ class TripViewModel : ViewModel() {
                             )
                         }
                         if (gate == DriverCompanyGate.APPROVED) {
-                            // Company access is APPROVED — now load packages, vehicle, and active trips in strict sequence
                             preloadDriverPackages()
                             loadDriverTrips()
                             startPackageSubscription()
                         } else {
-                            // Not approved — clear any vehicle/active trip state so screens don't show unassigned data
                             _state.update {
                                 it.copy(
                                     hasActiveTrip = false,
@@ -1895,15 +1952,12 @@ class TripViewModel : ViewModel() {
                                 )
                             }
                             if (gate == DriverCompanyGate.PENDING && _state.value.appRole == AppRole.DRIVER) {
-                                // Keep polling while awaiting approval so the app unlocks
-                                // automatically once a fleet manager approves the request.
                                 delay(20_000)
-                                refreshDriverCompanyGate()
+                                driverCompanyGatePoll = viewModelScope.launch { checkDriverRequestForGate() }
                             }
                         }
                     }
                     BackendStorage.DriverRequestStatusResult.NoRequest -> {
-                        // Genuinely no request — the company-code entry screen is correct.
                         _state.update {
                             it.copy(
                                 driverCompanyGate = DriverCompanyGate.REQUEST,
@@ -1920,10 +1974,7 @@ class TripViewModel : ViewModel() {
                         }
                     }
                     is BackendStorage.DriverRequestStatusResult.Error -> {
-                        // Transient auth/network/server failure. Never downgrade an
-                        // approved driver to the company-code screen; keep polling so
-                        // the gate recovers automatically once the backend is reachable.
-                        Log.w(TAG, "refreshDriverCompanyGate: check failed — ${result.message}")
+                        Log.w(TAG, "checkDriverRequestForGate failed — ${result.message}")
                         val currentGate = _state.value.driverCompanyGate
                         if (currentGate != DriverCompanyGate.APPROVED) {
                             _state.update {
@@ -1934,17 +1985,16 @@ class TripViewModel : ViewModel() {
                                 )
                             }
                         } else {
-                            // Pre-existing approved session offline fallback
                             _state.update { it.copy(driverCompanyGateLoaded = true) }
                             preloadDriverPackages()
                             loadDriverTrips()
                         }
                         delay(10_000)
-                        refreshDriverCompanyGate()
+                        driverCompanyGatePoll = viewModelScope.launch { checkDriverRequestForGate() }
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "refreshDriverCompanyGate failed: ${e.message}")
+                Log.w(TAG, "checkDriverRequestForGate failed: ${e.message}")
                 val currentGate = _state.value.driverCompanyGate
                 if (currentGate != DriverCompanyGate.APPROVED) {
                     _state.update {
@@ -1955,7 +2005,6 @@ class TripViewModel : ViewModel() {
                         )
                     }
                 } else {
-                    // Pre-existing approved session offline fallback
                     _state.update { it.copy(driverCompanyGateLoaded = true) }
                     preloadDriverPackages()
                     loadDriverTrips()
@@ -2655,6 +2704,27 @@ class TripViewModel : ViewModel() {
         return normA == normB || normA.contains(normB) || normB.contains(normA)
     }
 
+    /** Haversine distance in km. */
+    private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        return r * 2 * Math.asin(Math.min(1.0, Math.sqrt(a)))
+    }
+
+    // A DONE/ARRIVED waypoint whose reported remaining position is farther than this
+    // from the live GPS sample is bogus (e.g. fake emulator coordinates on another
+    // continent). Such waypoints must NOT be marked as passed — no-miss invariant.
+    private fun isReachPlausible(wp: BackendStorage.DriverTripWaypoint, update: MqttTripUpdate): Boolean {
+        val lat = update.latitude ?: return true // no position in update → trust server state
+        val lng = update.longitude ?: return true
+        if (wp.latitude == 0.0 && wp.longitude == 0.0) return true // waypoint has no coords
+        return haversineKm(lat, lng, wp.latitude, wp.longitude) <= MAX_WAYPOINT_REACH_KM
+    }
+
     /**
      * Fast-path: applies the server's live waypoint progress (travel-ordered,
      * sent ~every 10s) onto the displayed active trip and recomputes the stop
@@ -2701,7 +2771,13 @@ class TripViewModel : ViewModel() {
             if (progress == null) {
                 wp
             } else {
-                val reached = progress.state == "DONE" || progress.state == "ARRIVED"
+                // No-miss guard: an already-passed stop stays passed (monotonic), but a
+                // NEWLY DONE/ARRIVED stop is only trusted when the live GPS sample is
+                // plausibly near it. A bogus far-away coordinate (e.g. emulator default
+                // GPS on another continent) can therefore never mark a waiting stop as
+                // passed.
+                val newlyReached = progress.state == "DONE" || progress.state == "ARRIVED"
+                val reached = wp.isPassed || (newlyReached && isReachPlausible(wp, update))
                 val isNext = !allReached && !reached && when {
                     nextProgress == null -> false
                     nextProgress.waypointIndex >= 0 && (wp.order ?: -1) == nextProgress.waypointIndex + 1 -> true
@@ -2942,64 +3018,58 @@ class TripViewModel : ViewModel() {
     }
 
     /**
-     * Fetches the driver's worker profile + assigned vehicle from cavgomain and
-     * stores it in state (vehicle id, plate, model, seats + driverHasVehicle).
+     * Refreshes the driver's profile + assigned vehicle from the single sync
+     * endpoint (POST /main/users/sync), which carries the user's identity,
+     * company, and active vehicle — no separate /main my-vehicle call.
      * Also keeps MQTT publishing pointed at the assigned vehicle.
      */
     private suspend fun refreshDriverVehicle() {
-        val userId = _state.value.authUser?.id?.toLongOrNull() ?: return
-        when (val result = BackendStorage.fetchDriverWorker(userId)) {
-            is BackendStorage.DriverWorkerResult.NotFound -> {
-                // Backend CONFIRMED there is no worker profile / assigned car (HTTP 404)
-                // — clearing is correct here.
-                _state.update { it.copy(vehicle = it.vehicle.copy(id = null), driverHasVehicle = false) }
-                MqttLocationPublisher.vehicleId = null
+        val sync = BackendStorage.getUserSync() ?: return
+        if (!sync.hasCompany) {
+            // Approved driver but sync reports no company — transient/inconsistent;
+            // the gate polling surfaces the real membership state. Keep current.
+            return
+        }
+        val v = sync.vehicle
+        _state.update {
+            it.copy(
+                driverProfile = it.driverProfile.copy(
+                    name = sync.displayName.ifBlank { it.driverProfile.name },
+                    phone = sync.phone ?: it.driverProfile.phone,
+                    email = sync.email ?: it.driverProfile.email
+                )
+            )
+        }
+        if (v != null) {
+            _state.update {
+                it.copy(
+                    vehicle = DriverVehicle(
+                        id = v.id?.takeIf { id -> id > 0 },
+                        plateNumber = v.licensePlate ?: it.vehicle.plateNumber,
+                        model = listOfNotNull(v.make, v.model).joinToString(" ").ifBlank { it.vehicle.model },
+                        vehicleType = v.vehicleType ?: it.vehicle.vehicleType,
+                        seats = v.capacity.takeIf { it > 0 } ?: it.vehicle.seats
+                    ),
+                    driverHasVehicle = true
+                )
+            }
+            // Keep MQTT location publishing and trip subscriber pointed at the assigned vehicle
+            val assignedVid = v.id?.takeIf { it > 0 }?.toString()
+            MqttLocationPublisher.vehicleId = assignedVid
+            if (assignedVid != null) {
+                MqttTripSubscriber.subscribe(assignedVid) { update ->
+                    onTripMqttMessage(update)
+                }
+            } else {
                 MqttTripSubscriber.disconnect()
             }
-            is BackendStorage.DriverWorkerResult.Unreachable -> {
-                // Auth/network/server failure — keep the persisted vehicle and active
-                // trip. A backend outage must never look like "driver has no car".
-                Log.w(TAG, "refreshDriverVehicle: backend unreachable (${result.message}) — keeping current vehicle")
-            }
-            is BackendStorage.DriverWorkerResult.Found -> {
-                val worker = result.worker
-                val v = worker.vehicle
-                _state.update {
-                    it.copy(
-                        driverProfile = it.driverProfile.copy(
-                            name = worker.name.ifBlank { it.driverProfile.name },
-                            phone = worker.phone ?: it.driverProfile.phone,
-                            email = worker.email ?: it.driverProfile.email
-                        )
-                    )
-                }
-                if (v != null) {
-                    _state.update {
-                        it.copy(
-                            vehicle = DriverVehicle(
-                                id = v.id.takeIf { id -> id > 0 },
-                                plateNumber = v.licensePlate ?: it.vehicle.plateNumber,
-                                model = listOfNotNull(v.make, v.model).joinToString(" ").ifBlank { it.vehicle.model },
-                                vehicleType = v.vehicleType ?: it.vehicle.vehicleType,
-                                seats = v.capacity.takeIf { it > 0 } ?: it.vehicle.seats
-                            ),
-                            driverHasVehicle = true
-                        )
-                    }
-                    // Keep MQTT location publishing and trip subscriber pointed at the assigned vehicle
-                    val assignedVid = v.id.takeIf { it > 0 }?.toString()
-                    MqttLocationPublisher.vehicleId = assignedVid
-                    if (assignedVid != null) {
-                        MqttTripSubscriber.subscribe(assignedVid) { update ->
-                            onTripMqttMessage(update)
-                        }
-                    } else {
-                        MqttTripSubscriber.disconnect()
-                    }
-                } else {
-                    Log.w(TAG, "refreshDriverVehicle: worker returned no vehicle info — keeping current vehicle")
-                }
-            }
+        } else {
+            // Sync CONFIRMED the driver belongs to a company but has no active
+            // vehicle — clearing is correct here.
+            Log.i(TAG, "refreshDriverVehicle: sync confirms no assigned vehicle — clearing")
+            _state.update { it.copy(vehicle = it.vehicle.copy(id = null), driverHasVehicle = false) }
+            MqttLocationPublisher.vehicleId = null
+            MqttTripSubscriber.disconnect()
         }
     }
 
@@ -3028,9 +3098,12 @@ class TripViewModel : ViewModel() {
         // Prefer the backend's explicit isNext marker (set for the true next stop in
         // travel order), then fall back to the first unpassed waypoint. Waypoints are
         // already sorted by travel order, so this is stable across refetch slumps.
+        // No-miss invariant: always take the EARLIEST indicator — an isNext pointing at
+        // a later stop must never skip an earlier unpassed waypoint (data inconsistency).
         val isNextIdx = backendTrip.waypoints.indexOfFirst { it.isNext }
         val firstUnpassed = backendTrip.waypoints.indexOfFirst { !it.isPassed }
         val idx = when {
+            isNextIdx != -1 && firstUnpassed != -1 -> minOf(isNextIdx, firstUnpassed) + 1
             isNextIdx != -1 -> isNextIdx + 1
             firstUnpassed != -1 -> firstUnpassed + 1
             else -> backendTrip.waypoints.size + 1 // All waypoints passed -> destination (last index)

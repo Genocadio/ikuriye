@@ -47,7 +47,7 @@ import com.gocavgo.ikuriye.viewmodel.DriverCompanyGate
 /**
  * Full-screen gate for DRIVER-role users who do not yet belong to a company.
  *
- * - evaluating: status still loading — spinner (with retry on error)
+ * - evaluating / UNKNOWN: status still loading, or the check failed — spinner (with retry on error)
  * - REQUEST: no request yet — company code form to request access
  * - PENDING: request submitted — waiting-for-approval screen
  * - REJECTED: request rejected — kept out (reason shown), may re-request
@@ -90,11 +90,11 @@ fun DriverCompanyGateScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 when {
-                    evaluating -> {
+                    evaluating || gate == DriverCompanyGate.UNKNOWN -> {
                         CircularProgressIndicator(color = colors.green, strokeWidth = 3.dp)
                         Spacer(Modifier.height(18.dp))
                         Text(
-                            "Checking your company status…",
+                            if (error != null) "Couldn't verify your company status" else "Checking your company status…",
                             color = colors.textPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold

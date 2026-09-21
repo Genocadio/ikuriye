@@ -1,6 +1,5 @@
 package com.gocavgo.ikuriye.ui.driver
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -9,11 +8,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,7 +20,6 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,19 +44,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
 import com.gocavgo.ikuriye.ui.TripContent
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.PathEffect
 import com.gocavgo.ikuriye.ui.common.CachedAvatarImage
 import com.gocavgo.ikuriye.ui.common.ProfileQuickMenu
 import com.gocavgo.ikuriye.ui.common.SettingsMenu
 import com.gocavgo.ikuriye.ui.common.VehiclePlatePill
-import com.gocavgo.ikuriye.ui.common.adaptiveHorizontalPadding
 import com.gocavgo.ikuriye.ui.common.contentMaxWidth
 import com.gocavgo.ikuriye.ui.common.isWideScreen
 import com.gocavgo.ikuriye.ui.theme.LocalDriversColors
@@ -149,8 +136,7 @@ fun DriverHomeScreen(
                                     viewModel       = viewModel,
                                     vehiclePlate    = vehicle.plateNumber,
                                     onVehicleClick  = onVehicleClick,
-                                    onProfileClick  = onProfileClick,
-                                    completedTrips  = completedTrips
+                                    onProfileClick  = onProfileClick
                                 )
                             }
                             // Disconnect banner at top

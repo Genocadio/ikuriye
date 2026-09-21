@@ -1,185 +1,101 @@
 package com.gocavgo.ikuriye.ui
 
-import android.annotation.SuppressLint
-import android.location.Location
-import android.provider.Settings
+import android.util.Log
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.*
-import androidx.compose.animation.expandVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.*
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import kotlinx.coroutines.delay
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.EventSeat
+import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.NearMe
+import androidx.compose.material.icons.filled.RemoveCircle
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.layout.WindowInsets
-import com.gocavgo.ikuriye.data.ClientPackage
-import com.gocavgo.ikuriye.data.PackageStatus
+import com.gocavgo.ikuriye.BuildConfig
+import com.gocavgo.ikuriye.data.Package
+import com.gocavgo.ikuriye.ui.common.VehiclePlatePill
+import com.gocavgo.ikuriye.ui.common.adaptiveHorizontalPadding
+import com.gocavgo.ikuriye.ui.common.contentMaxWidth
+import com.gocavgo.ikuriye.ui.common.isLandscape
+import com.gocavgo.ikuriye.ui.common.isWideScreen
+import com.gocavgo.ikuriye.ui.driver.UpcomingPackagesSection
 import com.gocavgo.ikuriye.ui.theme.LocalDriversColors
-import com.gocavgo.ikuriye.util.PhoneValidation
 import com.gocavgo.ikuriye.viewmodel.AppThemeMode
 import com.gocavgo.ikuriye.viewmodel.CompletedTrip
 import com.gocavgo.ikuriye.viewmodel.DriverProfile
 import com.gocavgo.ikuriye.viewmodel.DriverVehicle
-import com.gocavgo.ikuriye.viewmodel.DriverLocation
 import com.gocavgo.ikuriye.viewmodel.TripUiState
 import com.gocavgo.ikuriye.viewmodel.TripViewModel
-import android.util.Log
-import com.gocavgo.ikuriye.BuildConfig
-import com.gocavgo.ikuriye.data.Package
-import com.gocavgo.ikuriye.data.TripStop
-import com.gocavgo.ikuriye.network.BackendStorage
-import com.gocavgo.ikuriye.ui.common.ProfileQuickMenu
-import com.gocavgo.ikuriye.ui.common.SettingsMenu
-import com.gocavgo.ikuriye.ui.common.VehiclePlatePill
-import com.gocavgo.ikuriye.ui.common.adaptiveHorizontalPadding
-import com.gocavgo.ikuriye.ui.common.isLandscape
-import com.gocavgo.ikuriye.ui.common.isWideScreen
-import com.gocavgo.ikuriye.ui.common.contentMaxWidth
-import com.gocavgo.ikuriye.ui.driver.DriverHomeScreen as DriverHomeScreenImpl
-import com.gocavgo.ikuriye.ui.driver.UpcomingPackagesSection
+import kotlinx.coroutines.delay
 import java.util.Locale
+import com.gocavgo.ikuriye.ui.driver.DriverHomeScreen as DriverHomeScreenImpl
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN TRIP SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
-
-@Composable
-fun TripScreen(
-    viewModel: TripViewModel,
-    profile: DriverProfile = DriverProfile(),
-    vehicle: DriverVehicle = DriverVehicle(),
-    vehiclePlate: String = "",
-    isProfileMenuOpen: Boolean = false,
-    isVehicleMenuOpen: Boolean = false,
-    isSettingsOpen: Boolean = false,
-    isCompletedTripsOpen: Boolean = false,
-    themeMode: AppThemeMode = AppThemeMode.SYSTEM,
-    isPipEnabled: Boolean = false,
-    completedTrips: List<CompletedTrip> = emptyList(),
-    onProfileClick: () -> Unit = {},
-    onVehicleClick: () -> Unit = {},
-    onEditProfileClick: () -> Unit = {},
-    onSettingsClick: () -> Unit = {},
-    onLogoutClick: () -> Unit = {},
-    onCloseSettings: () -> Unit = {},
-    onDismissMenus: () -> Unit = {},
-    onCompletedTripsClick: () -> Unit = {},
-    onThemeModeChange: (AppThemeMode) -> Unit = {},
-    onPipEnabledChange: (Boolean) -> Unit = {},
-    onDefaultPageChange: (String) -> Unit = {},
-    onKeepScreenAwakeChange: (Boolean) -> Unit = {}
-) {
-    val state by viewModel.state.collectAsState()
-    val colors = LocalDriversColors.current
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background)
-    ) {
-        if (state.tripCompleted) {
-            TripCompletedScreen()
-            return@Box
-        }
-
-        TripContent(viewModel, vehiclePlate, onVehicleClick, onProfileClick, isVehicleMenuOpen = isVehicleMenuOpen, vehicle = vehicle)
-
-        if (isVehicleMenuOpen || isProfileMenuOpen || isSettingsOpen) {
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                        onClick = onDismissMenus
-                    )
-            )
-        }
-
-        if (isVehicleMenuOpen) {
-            VehicleDetailsMenu(
-                vehicle = vehicle,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .statusBarsPadding()
-                    .padding(start = 16.dp, top = 58.dp)
-            )
-        }
-
-        if (isProfileMenuOpen) {
-            ProfileQuickMenu(
-                profile = profile,
-                onProfileClick = onEditProfileClick,
-                onSettingsClick = onSettingsClick,
-                onLogoutClick = onLogoutClick,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(end = 16.dp, top = 58.dp)
-            )
-        }
-
-        if (isSettingsOpen) {
-            SettingsMenu(
-                themeMode = themeMode,
-                isPipEnabled = isPipEnabled,
-                onThemeModeChange = onThemeModeChange,
-                onPipEnabledChange = onPipEnabledChange,
-                onDefaultPageChange = onDefaultPageChange,
-                onKeepScreenAwakeChange = onKeepScreenAwakeChange,
-                onClose = onCloseSettings,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(end = 16.dp, top = 58.dp)
-            )
-        }
-    }
-}
 
 // ── Reusable trip content (no menus, no overlays) ────────────────────────────
 
@@ -189,7 +105,6 @@ fun TripContent(
     vehiclePlate: String,
     onVehicleClick: () -> Unit,
     onProfileClick: () -> Unit,
-    completedTrips: List<CompletedTrip> = emptyList(),
     isVehicleMenuOpen: Boolean = false,
     vehicle: DriverVehicle = DriverVehicle()
 ) {
@@ -250,7 +165,8 @@ fun TripContent(
                 }
 
                 // ── Top bar (compact on landscape) ──
-                TripTopBar(state, vehiclePlate, onProfileClick, onVehicleClick, isVehicleMenuOpen = isVehicleMenuOpen, vehicle = vehicle, landscape = landscape)
+                TripTopBar(state, vehiclePlate,
+                    onVehicleClick, isVehicleMenuOpen = isVehicleMenuOpen, vehicle = vehicle, landscape = landscape)
 
                 Spacer(Modifier.height(12.dp))
 
@@ -296,7 +212,6 @@ fun TripContent(
 fun TripTopBar(
     state: TripUiState,
     vehiclePlate: String,
-    onProfileClick: () -> Unit,
     onVehicleClick: () -> Unit,
     isVehicleMenuOpen: Boolean = false,
     vehicle: DriverVehicle = DriverVehicle(),
@@ -428,107 +343,6 @@ fun TripTopBar(
                     fontSize = 15.sp,
                     textAlign = TextAlign.Center
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun VehicleDetailsMenu(
-    vehicle: DriverVehicle,
-    modifier: Modifier = Modifier
-) {
-    val colors = LocalDriversColors.current
-
-    Surface(
-        modifier = modifier
-            .widthIn(min = 220.dp, max = 280.dp)
-            .clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() },
-                onClick = {}
-            ),
-        shape = RoundedCornerShape(14.dp),
-        color = colors.surface,
-        tonalElevation = 8.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, colors.divider)
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(colors.blue.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Filled.DirectionsCar, null, tint = colors.blue, modifier = Modifier.size(20.dp))
-                }
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(vehicle.plateNumber, color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                    Text("Assigned vehicle", color = colors.textSecondary, fontSize = 11.sp)
-                }
-            }
-
-            HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 12.dp))
-            MenuInfoRow("Model", vehicle.model, Icons.Filled.DirectionsCar)
-            if (!vehicle.vehicleType.isNullOrBlank()) {
-                Spacer(Modifier.height(10.dp))
-                MenuInfoRow("Type", vehicle.vehicleType, Icons.Filled.LocalShipping)
-            }
-            Spacer(Modifier.height(10.dp))
-            MenuInfoRow("Seat size", "${vehicle.seats} seats", Icons.Filled.EventSeat)
-        }
-    }
-}
-@Composable
-private fun MenuInfoRow(
-    label: String,
-    value: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector
-) {
-    val colors = LocalDriversColors.current
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = colors.textSecondary, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(9.dp))
-        Column {
-            Text(label, color = colors.textSecondary, fontSize = 10.sp)
-            Text(value, color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-// ── Location Bar ──────────────────────────────────────────────────────────────
-@SuppressLint("DefaultLocale")
-@Composable
-fun LocationBar(loc: DriverLocation) {
-    val colors = LocalDriversColors.current
-    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
-        initialValue = 0.4f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse),
-        label = "alpha"
-    )
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(12.dp), color = colors.surfaceAlt
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(colors.green.copy(alpha = pulse)))
-            Spacer(Modifier.width(8.dp))
-            if (loc.lat == 0.0 && loc.lng == 0.0) {
-                Text("Acquiring GPS…", color = colors.textSecondary, fontSize = 11.sp)
-            } else {
-                Text("%.5f, %.5f".format(loc.lat, loc.lng),
-                    color = colors.green, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.weight(1f))
-                Text("±${loc.accuracy.toInt()}m  ${String.format(java.util.Locale.US, "%.0f", loc.speedKmh)} km/h",
-                    color = colors.textSecondary, fontSize = 10.sp)
             }
         }
     }

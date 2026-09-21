@@ -61,109 +61,91 @@ object BackendStorage {
      */
     private val restBaseUrl: String = BuildConfig.REST_BASE_URL
 
-    // ── Driver profile + vehicle (cavgomain via gateway /main/vehicles/driver/{id}) ──
-
-    data class DriverWorkerResponse(
-        val id: String,
-        val name: String,
-        val phone: String?,
-        val email: String?,
-        val licenseNumber: String?,
-        val status: String?,
-        val role: String?,
-        val vehicle: DriverVehicleResponse?
-    )
+    // ── User sync (POST /main/users/sync) ─────────────────────────────────
 
     /**
-     * Result of fetching the driver's worker profile. Callers MUST distinguish
-     * "backend confirmed no vehicle (HTTP 404)" from "the backend could not be
-     * reached" — an unreachable backend must never be handled as "driver has no
-     * vehicle", otherwise the driver's car and active trip disappear during a
-     * network/server event.
+     * Payload of POST /main/users/sync. The response is nested: [firstName]/
+     * [lastName]/[email]/[phone] carry identity, [companyId] is null when the
+     * user is not a company member yet, and [vehicle] is the driver's active
+     * vehicle (null when unassigned). A driver who already belongs to a company
+     * is treated as approved.
      */
-    sealed interface DriverWorkerResult {
-        /** HTTP 200 — parsed worker profile (vehicle may still be null). */
-        data class Found(val worker: DriverWorkerResponse) : DriverWorkerResult
-        /** HTTP 404 — the backend confirmed there is no worker profile / vehicle. */
-        data object NotFound : DriverWorkerResult
-        /** Auth, HTTP, or transport failure — do NOT conclude "no vehicle". */
-        data class Unreachable(val message: String) : DriverWorkerResult
-    }
-
-    data class DriverVehicleResponse(
-        val id: Long,
+    data class UserSyncVehicle(
+        val id: Long?,
+        val licensePlate: String?,
         val make: String?,
         val model: String?,
         val capacity: Int,
-        val licensePlate: String?,
-        val vehicleType: String?,
-        val status: String?,
-        val isOnline: Boolean?,
-        val lastOnlineAt: String?
+        val vehicleType: String?
     )
 
+    data class UserSyncResult(
+        val id: Long?,
+        val firstName: String?,
+        val lastName: String?,
+        val email: String?,
+        val phone: String?,
+        val role: String?,
+        val companyId: Long?,
+        val companyName: String?,
+        val companyCode: String?,
+        val vehicle: UserSyncVehicle?
+    ) {
+        val hasCompany: Boolean get() = companyId != null
+        val displayName: String get() = listOfNotNull(firstName, lastName).joinToString(" ")
+    }
+
     /**
-     * Fetch the driver's assigned vehicle from cavgomain via the authenticated
-     * vehicle endpoint. Returns a [DriverWorkerResponse] with vehicle data and
-     * the driver profile extracted from the nested driver object.
-     *
-     * Uses GET /main/vehicles/driver/{id} which returns VehicleResponseDto:
-     * { id, licensePlate, make, model, capacity, isOnline, status, vehicleType,
-     *   driver: { firstName, lastName, email, phone, role, licenseNumber, ... } }
+     * Mirrors the authenticated user on the backend and resolves their company,
+     * driver profile, and assigned vehicle. This is the single profile entry
+     * point shared with ikuriyeweb and fleetman — my-vehicle/my-driver data no
+     * longer needs a separate /main call. Returns null when the sync could not
+     * be confirmed (auth/network/server failure or a missing nested payload) so
+     * callers keep the current gate.
      */
-    suspend fun fetchDriverWorker(driverId: Long): DriverWorkerResult = withContext(Dispatchers.IO) {
+    suspend fun getUserSync(): UserSyncResult? = withContext(Dispatchers.IO) {
         try {
-            val accessToken = NexxAuth.getAccessToken()
-            if (accessToken.isNullOrBlank()) {
-                Log.w(TAG, "fetchDriverWorker: no access token")
-                return@withContext DriverWorkerResult.Unreachable("Not authenticated")
-            }
-            val url = "$restBaseUrl/main/vehicles/driver/$driverId"
-            val request = Request.Builder().url(url).get()
+            val accessToken = com.gocavgo.ikuriye.nexx.NexxAuth.getAccessToken()
+            if (accessToken.isNullOrBlank()) return@withContext null
+            val request = Request.Builder()
+                .url("$restBaseUrl/main/users/sync")
+                .post("{}".toRequestBody("application/json".toMediaType()))
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "application/json")
                 .addHeader("Authorization", "Bearer $accessToken")
                 .build()
             val response = httpClient.newCall(request).execute()
-            if (response.code == 404) {
-                Log.i(TAG, "fetchDriverWorker: driver $driverId has no assigned vehicle worker profile (HTTP 404)")
-                return@withContext DriverWorkerResult.NotFound
-            }
-            val body = response.body?.string() ?: return@withContext DriverWorkerResult.Unreachable("Empty response")
+            val body = response.body?.string()
             if (!response.isSuccessful) {
-                Log.w(TAG, "fetchDriverWorker failed: HTTP ${response.code}: $body")
-                return@withContext DriverWorkerResult.Unreachable("HTTP ${response.code}")
+                Log.w(TAG, "getUserSync failed: HTTP ${response.code}: $body")
+                return@withContext null
             }
-            val json = JSONObject(body)
-            val vehicleJson = json
-            val driverJson = json.optJSONObject("driver")
-            DriverWorkerResult.Found(
-                DriverWorkerResponse(
-                    id = driverJson?.optString("id", null)
-                        ?: driverId.toString(),
-                    name = listOfNotNull(
-                        driverJson?.optString("firstName", null),
-                        driverJson?.optString("lastName", null)
-                    ).joinToString(" ").ifBlank { "" },
-                    phone = driverJson?.optString("phone", null),
-                    email = driverJson?.optString("email", null),
-                    licenseNumber = driverJson?.optString("licenseNumber", null),
-                    status = driverJson?.optString("status", null),
-                    role = driverJson?.optString("role", null),
-                    vehicle = DriverVehicleResponse(
-                        id = vehicleJson.optLong("id", 0),
-                        make = vehicleJson.optString("make", null),
-                        model = vehicleJson.optString("model", null),
-                        capacity = vehicleJson.optInt("capacity", 0),
-                        licensePlate = vehicleJson.optString("licensePlate", null),
-                        vehicleType = if (vehicleJson.has("vehicleType")) vehicleJson.optString("vehicleType", null) else null,
-                        status = vehicleJson.optString("status", null),
-                        isOnline = if (vehicleJson.has("isOnline")) vehicleJson.optBoolean("isOnline") else null,
-                        lastOnlineAt = vehicleJson.optString("lastOnlineAt", null)
-                    )
-                )
+            val json = JSONObject(body ?: return@withContext null)
+            val userJson = json.optJSONObject("user") ?: return@withContext null
+            val companyJson = json.optJSONObject("company")
+            val vehicleJson = companyJson?.optJSONObject("vehicle")
+            UserSyncResult(
+                id = userJson.optLong("id", 0).takeIf { it > 0 },
+                firstName = userJson.optString("firstName", null),
+                lastName = userJson.optString("lastName", null),
+                email = userJson.optString("email", null),
+                phone = userJson.optString("phone", null),
+                role = userJson.optString("role", null),
+                companyId = companyJson?.optLong("companyId", 0)?.takeIf { it > 0 },
+                companyName = companyJson?.optString("companyName", null),
+                companyCode = companyJson?.optString("companyCode", null),
+                vehicle = if (vehicleJson != null) UserSyncVehicle(
+                    id = vehicleJson.optLong("id", 0).takeIf { it > 0 },
+                    licensePlate = vehicleJson.optString("licensePlate", null),
+                    make = vehicleJson.optString("make", null),
+                    model = vehicleJson.optString("model", null),
+                    capacity = vehicleJson.optInt("capacity", 0),
+                    vehicleType = vehicleJson.optString("vehicleType", null)
+                ) else null
             )
         } catch (e: Exception) {
-            Log.w(TAG, "fetchDriverWorker failed: ${e.message}")
-            DriverWorkerResult.Unreachable(e.message ?: "Network error")
+            Log.w(TAG, "getUserSync failed: ${e.message}")
+            null
         }
     }
 
